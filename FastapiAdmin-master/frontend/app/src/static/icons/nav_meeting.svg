@@ -1,0 +1,22 @@
+<svg width="104" height="104" viewBox="0 0 104 104" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g-meeting" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="100" height="100" rx="22" fill="url(#g-meeting)"/>
+  <!-- 议程板外框 -->
+  <rect x="26" y="24" width="52" height="56" rx="5" fill="none" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
+  <!-- 顶部夹子 -->
+  <rect x="44" y="20" width="16" height="8" rx="2" fill="#ffffff"/>
+  <!-- 标题线 -->
+  <line x1="34" y1="36" x2="70" y2="36" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+  <!-- 议程条目（勾选+横线） -->
+  <circle cx="36" cy="48" r="3" fill="#ffffff"/>
+  <line x1="44" y1="48" x2="66" y2="48" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="36" cy="58" r="3" fill="#ffffff"/>
+  <line x1="44" y1="58" x2="64" y2="58" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="36" cy="68" r="3" fill="none" stroke="#ffffff" stroke-width="2.5"/>
+  <line x1="44" y1="68" x2="60" y2="68" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+</svg>

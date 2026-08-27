@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 220" preserveAspectRatio="none">
+  <path d="M0,110 L120,110 L150,60 L180,160 L210,110 L260,110 L320,110 L350,40 L380,180 L420,110 L520,110 L540,80 L560,140 L600,110 L720,110 L760,20 L800,200 L850,110 L960,110 L980,70 L1010,150 L1060,110 L1180,110 L1210,50 L1250,170 L1300,110 L1440,110"
+        fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

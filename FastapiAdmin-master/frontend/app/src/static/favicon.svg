@@ -1,0 +1,14 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g-fav" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#g-fav)"/>
+  <!-- 医疗十字 -->
+  <rect x="24" y="14" width="16" height="36" rx="3" fill="#ffffff"/>
+  <rect x="14" y="24" width="36" height="16" rx="3" fill="#ffffff"/>
+  <!-- 心形小点缀 -->
+  <circle cx="50" cy="14" r="3" fill="#ef4444"/>
+</svg>

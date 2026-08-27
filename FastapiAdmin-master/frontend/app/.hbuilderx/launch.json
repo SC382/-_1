@@ -1,0 +1,12 @@
+{
+    "version" : "1.0",
+    "configurations" : [
+        {
+            "customPlaygroundType" : "device",
+            "localRepoPath" : "D:/xiongtongzhongxin/FastapiAdmin-master/frontend/app",
+            "packageName" : "1",
+            "playground" : "standard",
+            "type" : "uni-app:app-android"
+        }
+    ]
+}

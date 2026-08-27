@@ -1,0 +1,20 @@
+<svg width="104" height="104" viewBox="0 0 104 104" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g-data" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="100" height="100" rx="22" fill="url(#g-data)"/>
+  <!-- 文档外框 -->
+  <rect x="34" y="26" width="36" height="52" rx="4" fill="none" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
+  <!-- 文档折角 -->
+  <path d="M58 26 L70 38 L58 38 Z" fill="#ffffff" opacity="0.4"/>
+  <!-- 表单横线 -->
+  <line x1="40" y1="46" x2="64" y2="46" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+  <line x1="40" y1="54" x2="64" y2="54" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+  <line x1="40" y1="62" x2="58" y2="62" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+  <!-- 复选标记 -->
+  <circle cx="40" cy="71" r="3" fill="#ffffff"/>
+  <path d="M46 71 L49 74 L55 67" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
