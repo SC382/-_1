@@ -1,32 +1,34 @@
-<!-- AI 助手：认证帮扶问答（知识库 AI 问答，流式打字机展示，回答末尾直接标注来源） -->
+<!-- AI 助手：鲲仑·平安（胸痛中心建设专属智能助手 · 知识库 AI 问答） -->
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
+import { nextTick, onUnmounted, reactive, ref } from 'vue'
 import DoctorAPI, { type KbAskResult } from '@/api/module_cpx/doctor'
 
 definePage({
   name: 'ai',
   layout: 'tabbar',
-  style: { navigationBarTitleText: '认证帮扶问答' },
+  style: { navigationStyle: 'custom', navigationBarTitleText: '鲲仑·平安' },
 })
 
+type ChatMsg = { role: 'user' | 'ai'; content: string; sources?: { source_file: string; page_no: number }[] }
+const messages = reactive<ChatMsg[]>([])
 const question = ref('')
 const loading = ref(false)
-const asked = ref(false)
-// 流式展示
-const displayText = ref('')     // 打字机当前已显示文本
-const fullText = ref('')        // 完整回答（含末尾【依据】行）
-const typing = ref(false)       // 是否正在打字
+const typing = ref(false)
 let typeTimer: ReturnType<typeof setInterval> | null = null
 
-// 快捷问题（点击直接提问）
+const scrollRef = ref<HTMLDivElement>()
+
+// 问心推荐问题（参考"胸痛中心认证帮扶"高频问题）
 const QUICK_QUESTIONS = [
-  'STEMI 患者 D2W 时间标准是多少？',
-  '首份心电图的时间要求是什么？',
-  'ACS 出院患者随访要求是什么？',
-  '再认证需要准备哪些材料？',
+  '建设胸痛中心应具备哪些心血管专科条件？',
+  '医院内部需要在哪里体现标识与指引？',
+  '如何建立时钟统一制度并管理？',
+  '医院低危病例非常多，能否不上报？',
+  '胸痛中心认证申请流程是什么？',
+  '胸痛中心认证要求的数据上报比例是多少？',
+  '最新的胸痛中心认证标准在哪可以下载？',
 ]
 
-/** 把结构化来源拼成回答末尾的依据行： 【依据：《文件》（第X页）、《文件》（第Y页）】 */
 function buildSourceLine(sources: { source_file: string; page_no: number }[]): string {
   if (!sources || !sources.length) return ''
   const seen = new Set<string>()
@@ -37,16 +39,23 @@ function buildSourceLine(sources: { source_file: string; page_no: number }[]): s
     seen.add(key)
     parts.push(`《${s.source_file}》（第${s.page_no}页）`)
   }
-  return `【依据：${parts.join('、')}】`
+  return `\n\n【依据：${parts.join('、')}】`
 }
 
-/** 停止打字机 */
 function stopTyping() {
   if (typeTimer) {
     clearInterval(typeTimer)
     typeTimer = null
   }
   typing.value = false
+}
+
+function scrollToBottom() {
+  nextTick(() => {
+    // #ifdef MP-WEIXIN
+    // uni.pageScrollTo({ scrollTop: 99999, duration: 100 })
+    // #endif
+  })
 }
 
 async function ask(q?: string) {
@@ -58,200 +67,355 @@ async function ask(q?: string) {
   if (q) question.value = q
   stopTyping()
   loading.value = true
-  asked.value = true
-  displayText.value = ''
-  fullText.value = ''
+
+  // 推入用户消息
+  messages.push({ role: 'user', content: text })
+
+  // 推入 AI 占位消息（流式填充）
+  const aiIndex = messages.length
+  messages.push({ role: 'ai', content: '' })
+
   try {
     const res = await DoctorAPI.kbAsk(text)
-    // 回答正文 + 末尾直接标注来源（不依赖模型自觉，前端固定拼接）
-    const srcLine = buildSourceLine(res.sources)
-    fullText.value = res.answer + (srcLine ? `\n\n${srcLine}` : '')
-    // 流式打字机：每 25ms 追加 2 个字符
+    const r = res as unknown as KbAskResult
+    const answer = r.answer || '暂未找到相关内容，请换个问法或联系院内管理员补充知识库。'
+    const sources = r.sources || []
+    const full = answer + buildSourceLine(sources)
+
+    // 打字机效果逐字显示（流式）
     typing.value = true
     let i = 0
     typeTimer = setInterval(() => {
-      i += 2
-      displayText.value = fullText.value.slice(0, i)
-      if (i >= fullText.value.length) {
+      i++
+      messages[aiIndex].content = full.slice(0, i)
+      messages[aiIndex].sources = sources
+      if (i >= full.length) {
         stopTyping()
       }
-    }, 25)
+      scrollToBottom()
+    }, 18)
   }
   catch {
-    /* http 层已 toast */
+    messages[aiIndex].content = '请求失败，请稍后重试'
+    messages[aiIndex].sources = []
   }
   finally {
     loading.value = false
+    question.value = ''
+    scrollToBottom()
   }
+}
+
+function onSendTap() {
+  ask()
+}
+
+function onClearChat() {
+  stopTyping()
+  messages.splice(0, messages.length)
+  question.value = ''
 }
 
 onUnmounted(stopTyping)
 </script>
 
 <template>
-  <view class="qa-page">
-    <!-- 输入区 -->
-    <view class="ask-bar">
-      <input
-        v-model="question"
-        class="ask-input"
-        placeholder="输入认证/质控问题，如：D2W 时间标准"
-        placeholder-class="ph"
-        confirm-type="search"
-        confirm-hold
-        @confirm="ask()"
-      />
-      <view class="ask-btn" :class="{ disabled: loading }" @click="ask()">
-        <text v-if="!loading">提问</text>
-        <text v-else>…</text>
-      </view>
+  <view class="ai-page">
+    <!-- 自定义导航栏（蓝紫色） -->
+    <view class="ai-header">
+      <text class="header-back" @click="uni.navigateBack">‹</text>
+      <text class="header-title">鲲仑·平安</text>
+      <text class="header-menu" @click="onClearChat">⋯</text>
     </view>
 
-    <!-- 快捷问题 -->
-    <view class="quick-wrap">
-      <text class="quick-label">快捷提问</text>
-      <view class="quick-tags">
-        <view v-for="q in QUICK_QUESTIONS" :key="q" class="quick-tag" @click="ask(q)">
-          <text class="quick-text">{{ q }}</text>
+    <!-- 首次进入：欢迎区 + 常见问题 -->
+    <template v-if="messages.length === 0">
+      <view class="welcome-card">
+        <view class="welcome-row">
+          <view class="welcome-avatar">
+            <image class="avatar-img" src="/static/images/ai-bot.png" mode="aspectFit" />
+          </view>
+          <view class="welcome-text">
+            <text class="welcome-hi">Hi，我是"鲲仑·平安"</text>
+            <text class="welcome-desc">您好，我是鲲仑·平安，您身边之胸痛中心建设专属智能助手，可以为您解答填报、认证、质控、诊疗相关问题，快来体验一下吧~</text>
+          </view>
         </view>
       </view>
-    </view>
 
-    <!-- 回答区（流式打字机） -->
-    <view v-if="loading" class="answer-loading">
-      <text class="loading-icon">🤖</text>
-      <text class="loading-text">AI 正在查阅知识库，请稍候…</text>
-    </view>
-
-    <view v-else-if="asked" class="answer-card">
-      <view class="answer-q">
-        <text class="q-mark">问</text>
-        <text class="q-text">{{ question }}</text>
+      <view class="quick-block">
+        <text class="quick-tip">您可以这样问~</text>
+        <view class="quick-list">
+          <view
+            v-for="q in QUICK_QUESTIONS"
+            :key="q"
+            class="quick-item"
+            @click="ask(q)"
+          >
+            <text class="quick-text">{{ q }}</text>
+            <text class="quick-arrow">›</text>
+          </view>
+        </view>
       </view>
-      <view class="answer-a">
-        <text class="a-mark">答</text>
-        <text class="a-text">
-          {{ displayText }}<text v-if="typing" class="cursor">▌</text>
-        </text>
-      </view>
-    </view>
+    </template>
 
-    <view v-else class="hint">
-      <text class="hint-title">💡 知识库说明</text>
-      <text class="hint-line">· 依据《中国胸痛中心认证标准（第六版）》</text>
-      <text class="hint-line">· 依据《中国胸痛中心再认证标准（标准版）》</text>
-      <text class="hint-line">· 每个回答末尾将直接标注依据来源（文件名 + 页码）</text>
+    <!-- 对话历史 -->
+    <scroll-view v-else class="chat-scroll" scroll-y :scroll-into-view="''">
+      <view
+        v-for="(m, i) in messages"
+        :key="i"
+        class="msg-row"
+        :class="{ user: m.role === 'user' }"
+      >
+        <view v-if="m.role === 'user'" class="bubble user-bubble">{{ m.content }}</view>
+        <view v-else class="bubble ai-bubble">
+          <view v-if="!m.content && loading && i === messages.length - 1" class="typing">
+            <text class="dot"></text><text class="dot"></text><text class="dot"></text>
+          </view>
+          <text v-else class="ai-content">{{ m.content }}</text>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 底部输入栏 -->
+    <view class="input-bar">
+      <view class="mic-btn">
+        <image class="mic-icon" src="/static/icons/mic.svg" mode="aspectFit" />
+      </view>
+      <view class="input-wrap">
+        <input
+          v-model="question"
+          class="input"
+          placeholder="请问我有什么可以帮您?"
+          placeholder-class="input-placeholder"
+          confirm-type="send"
+          @confirm="onSendTap"
+        />
+      </view>
+      <view class="send-btn" @click="onSendTap">
+        <text class="send-icon">↑</text>
+      </view>
     </view>
   </view>
 </template>
 
 <style lang="scss" scoped>
-.qa-page {
+.ai-page {
   min-height: 100vh;
-  background: #f3f4f6;
-  padding: 24rpx 32rpx 60rpx;
-}
-
-/* 输入区 */
-.ask-bar {
+  background: #f5f7fa;
   display: flex;
-  gap: 16rpx;
-  margin-bottom: 20rpx;
+  flex-direction: column;
+  padding-bottom: calc(140px + 52px + env(safe-area-inset-bottom));
 }
-.ask-input {
-  flex: 1;
-  height: 84rpx;
-  padding: 0 28rpx;
-  border-radius: 42rpx;
-  background: #ffffff;
-  font-size: 28rpx;
+.ai-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 88rpx;
+  padding: 0 24rpx;
+  padding-top: var(--status-bar-height, 44rpx);
+  background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+  color: #ffffff;
 }
-.ph { color: #9ca3af; }
-.ask-btn {
-  width: 140rpx;
-  height: 84rpx;
-  line-height: 84rpx;
+.header-back,
+.header-menu {
+  font-size: 48rpx;
+  width: 60rpx;
   text-align: center;
-  border-radius: 42rpx;
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
-  color: #ffffff;
-  font-size: 30rpx;
+  font-weight: 500;
+  line-height: 1;
+}
+.header-title {
+  font-size: 34rpx;
   font-weight: 600;
+  letter-spacing: 2rpx;
 }
-.ask-btn.disabled { opacity: 0.6; }
 
-/* 快捷提问 */
-.quick-wrap { margin-bottom: 24rpx; }
-.quick-label { font-size: 24rpx; color: #9ca3af; }
-.quick-tags { display: flex; flex-wrap: wrap; gap: 16rpx; margin-top: 12rpx; }
-.quick-tag {
-  padding: 12rpx 24rpx;
-  border-radius: 30rpx;
-  background: #ede9fe;
-}
-.quick-text { font-size: 24rpx; color: #6d28d9; }
-
-/* 回答 */
-.answer-loading { display: flex; flex-direction: column; align-items: center; padding-top: 120rpx; }
-.loading-icon { font-size: 72rpx; }
-.loading-text { margin-top: 20rpx; font-size: 26rpx; color: #9ca3af; }
-
-.answer-card {
-  padding: 28rpx;
-  border-radius: 20rpx;
+.welcome-card {
+  margin: 32rpx 32rpx 24rpx;
+  padding: 32rpx;
   background: #ffffff;
+  border-radius: 24rpx;
+  box-shadow: 0 4rpx 16rpx rgba(15, 23, 42, 0.04);
 }
-.answer-q { display: flex; gap: 12rpx; }
-.q-mark {
-  width: 40rpx;
-  height: 40rpx;
+.welcome-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 24rpx;
+}
+.welcome-avatar {
+  flex-shrink: 0;
+  width: 96rpx;
+  height: 96rpx;
   border-radius: 50%;
-  background: #8b5cf6;
-  color: #ffffff;
-  font-size: 22rpx;
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  overflow: hidden;
 }
-.q-text { font-size: 28rpx; font-weight: 600; color: #1f2937; line-height: 1.5; }
-.answer-a { display: flex; gap: 12rpx; margin-top: 20rpx; }
-.a-mark {
-  width: 40rpx;
-  height: 40rpx;
-  border-radius: 50%;
-  background: #10b981;
-  color: #ffffff;
-  font-size: 22rpx;
+.avatar-img {
+  width: 96rpx;
+  height: 96rpx;
+}
+.avatar-icon {
+  font-size: 56rpx;
+}
+.welcome-text {
+  flex: 1;
+  min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+  flex-direction: column;
+  gap: 8rpx;
 }
-.a-text { flex: 1; font-size: 26rpx; color: #4b5563; line-height: 1.75; white-space: pre-wrap; }
+.welcome-hi {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #1f2937;
+}
+.welcome-desc {
+  font-size: 25rpx;
+  line-height: 1.6;
+  color: #4b5563;
+}
 
-/* 流式光标 */
-.cursor {
-  display: inline-block;
-  margin-left: 2rpx;
-  color: #8b5cf6;
-  animation: blink 1s steps(1) infinite;
+.quick-block {
+  margin: 0 32rpx 32rpx;
+}
+.quick-tip {
+  display: block;
+  margin-bottom: 16rpx;
+  font-size: 26rpx;
+  color: #6b7280;
+}
+.quick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+.quick-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 28rpx;
+  background: #ffffff;
+  border-radius: 16rpx;
+  box-shadow: 0 2rpx 8rpx rgba(15, 23, 42, 0.04);
+}
+.quick-text {
+  flex: 1;
+  font-size: 27rpx;
+  color: #1f2937;
+}
+.quick-arrow {
+  font-size: 36rpx;
+  color: #9ca3af;
+  margin-left: 16rpx;
+  line-height: 1;
+}
+
+.msg-row {
+  display: flex;
+  margin: 16rpx 32rpx;
+}
+.msg-row.user {
+  justify-content: flex-end;
+}
+.bubble {
+  max-width: 80%;
+  padding: 20rpx 24rpx;
+  border-radius: 20rpx;
+  font-size: 28rpx;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.user-bubble {
+  background: #3b82f6;
+  color: #ffffff;
+  border-bottom-right-radius: 6rpx;
+}
+.ai-bubble {
+  background: #ffffff;
+  color: #1f2937;
+  border-bottom-left-radius: 6rpx;
+  box-shadow: 0 2rpx 8rpx rgba(15, 23, 42, 0.04);
+}
+.ai-content {
+  white-space: pre-wrap;
+}
+.typing {
+  display: flex;
+  gap: 8rpx;
+  padding: 4rpx 0;
+}
+.typing .dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: #cbd5e1;
+  animation: blink 1.2s infinite ease-in-out;
+}
+.typing .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing .dot:nth-child(3) {
+  animation-delay: 0.4s;
 }
 @keyframes blink {
-  0%, 50% { opacity: 1; }
-  50.01%, 100% { opacity: 0; }
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
 }
 
-.empty { display: flex; flex-direction: column; align-items: center; padding-top: 120rpx; }
-.empty-icon { font-size: 70rpx; }
-.empty-text { margin-top: 16rpx; font-size: 26rpx; color: #9ca3af; }
-
-.hint {
-  margin-top: 24rpx;
-  padding: 28rpx;
-  border-radius: 20rpx;
+.input-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(52px + env(safe-area-inset-bottom));
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 16rpx 24rpx;
   background: #ffffff;
+  border-top: 2rpx solid #e5e7eb;
 }
-.hint-title { display: block; font-size: 28rpx; font-weight: 600; color: #1f2937; margin-bottom: 12rpx; }
-.hint-line { display: block; font-size: 24rpx; color: #6b7280; line-height: 1.9; }
+.mic-btn,
+.send-btn {
+  flex-shrink: 0;
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mic-btn {
+  background: #f3f4f6;
+}
+.mic-icon {
+  width: 30rpx;
+  height: 30rpx;
+}
+.send-btn {
+  background: #3b82f6;
+}
+.send-icon {
+  color: #ffffff;
+  font-size: 40rpx;
+  font-weight: 600;
+  line-height: 1;
+}
+.input-wrap {
+  flex: 1;
+}
+.input {
+  background: #f5f7fa;
+  border-radius: 36rpx;
+  padding: 16rpx 28rpx;
+  font-size: 28rpx;
+  height: 72rpx;
+}
+.input-placeholder {
+  color: #9ca3af;
+}
 </style>

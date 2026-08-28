@@ -71,9 +71,16 @@ class KbService:
         return scored[:top_n]
 
     async def _llm(self, question: str, context: str) -> str:
-        """调用 DeepSeek（OPENAI 兼容）基于知识库片段回答。"""
-        if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-placeholder"):
-            raise CustomException(msg="未配置大模型 API Key（请在 env/.env.dev 配置 OPENAI_API_KEY）")
+        """调用 DeepSeek（OPENAI 兼容）基于知识库片段回答。
+
+        优先使用 DEEPSEEK_* 配置（问答走 DeepSeek）；未配置时回退 OPENAI_*（千问）。
+        图片识别不受影响（仍走 OPENAI_VISION_MODEL 千问）。
+        """
+        api_key = settings.DEEPSEEK_API_KEY or settings.OPENAI_API_KEY
+        if not api_key or api_key.startswith("sk-placeholder"):
+            raise CustomException(msg="未配置大模型 API Key（请在 env/.env.dev 配置 DEEPSEEK_API_KEY）")
+        base_url = settings.DEEPSEEK_BASE_URL or settings.OPENAI_BASE_URL
+        model = settings.DEEPSEEK_MODEL or settings.OPENAI_KB_MODEL or settings.OPENAI_MODEL
         prompt = (
             "你是胸痛中心认证标准知识库助手。请严格根据以下参考资料回答用户问题，"
             "不要编造资料之外的内容；若资料不足以回答，请明确回复“知识库中未找到相关内容”。\n\n"
@@ -89,14 +96,14 @@ class KbService:
         try:
             async with httpx.AsyncClient(timeout=90) as client:
                 resp = await client.post(
-                    settings.OPENAI_BASE_URL.rstrip("/") + "/chat/completions",
+                    base_url.rstrip("/") + "/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
                         # 知识库问答用专用快模型（deepseek-chat，非推理，2-10s 响应）
-                        "model": settings.OPENAI_KB_MODEL or settings.OPENAI_MODEL,
+                        "model": model,
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 4000,
                         "temperature": 0.2,

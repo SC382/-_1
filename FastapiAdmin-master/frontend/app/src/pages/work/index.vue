@@ -20,10 +20,15 @@ const list = ref<CaseRecordItem[]>([])
 const total = ref(0)
 const query = reactive({ page_no: 1, page_size: 10, status: '', keyword: '', start_time: '', end_time: '' })
 
-// 从首页统计数字跳转过来时，URL 参数自动筛选对应状态/日期
+// 从首页统计数字/今日报告跳转过来时，URL 参数或 storage 自动筛选对应状态/日期
 onLoad((opt: any) => {
-  if (opt?.range === 'today') {
-    // 今日新增：按今天的 create_time 范围筛选
+  // 优先读 storage 传递的筛选条件（H5 navigateTo 多参数可能丢失，双保险）
+  const f = uni.getStorageSync('workFilter') as { range?: string; status?: string } | undefined
+  if (f) uni.removeStorageSync('workFilter')
+  const range = f?.range || opt?.range
+  const status = f?.status || opt?.status
+  if (range === 'today') {
+    // 今日：按今天的 create_time 范围筛选
     const now = new Date()
     const y = now.getFullYear()
     const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -31,8 +36,8 @@ onLoad((opt: any) => {
     query.start_time = `${y}-${m}-${d}`
     query.end_time = `${y}-${m}-${d}`
   }
-  else if (opt?.status) {
-    query.status = opt.status
+  if (status) {
+    query.status = status
   }
   // onLoad 触发后立即加载一次
   fetchData()

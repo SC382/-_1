@@ -230,6 +230,16 @@ class Settings(BaseSettings):
     OPENAI_KB_MODEL: str = ""
     # 图片识别模型（Vision）
     OPENAI_VISION_MODEL: str = ""
+    # AI 识别专用平台（可独立于问答；为空则回退 DEEPSEEK → OPENAI）
+    OPENAI_VISION_BASE_URL: str = ""
+    OPENAI_VISION_API_KEY: str = ""
+    # AI 识别-文字解析专用模型（为空则用 OPENAI_MODEL）
+    OPENAI_TEXT_MODEL: str = ""
+
+    # DeepSeek（AI 知识库问答专用，OPENAI 兼容协议；优先于 OPENAI_KB_MODEL）
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_MODEL: str = "deepseek-chat"
 
     # ================================================= #
     # ******************* 动态配置 ******************* #

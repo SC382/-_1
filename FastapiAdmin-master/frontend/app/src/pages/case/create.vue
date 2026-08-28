@@ -3,6 +3,11 @@
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import DoctorAPI, { type DoctorTemplate } from '@/api/module_cpx/doctor'
+import { useUserStore } from '@/store/userStore'
+import { http } from '@/http'
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const userStore = useUserStore()
 
 definePage({
   name: 'case-create',
@@ -64,17 +69,160 @@ function goBack() {
   uni.navigateBack()
 }
 
-// ── AI 智能录入（语音/拍照/本地上传/证件扫描，OCR/ASR 二期接入，识别结果可修改后回填）──
+// ── AI 智能录入（AI 自主判断字段 → 动态映射回填表单，识别结果可修改）──
+// 字段名映射：AI 返回的标准编码 / 中文名 → 表单字段
+const FIELD_MAP: Record<string, string> = {
+  patient_name: 'patient_name', '姓名': 'patient_name', '患者姓名': 'patient_name',
+  gender: 'gender', '性别': 'gender',
+  age: 'age', '年龄': 'age',
+  birth_date: 'birth_date', '出生日期': 'birth_date',
+  id_number: 'id_number', '身份证号': 'id_number',
+  id_type: 'id_type', '证件类型': 'id_type',
+  phone: 'phone', '联系电话': 'phone', '电话': 'phone',
+  come_type: 'come_type', '来院方式': 'come_type',
+  onset_address: 'onset_address', '发病地址': 'onset_address',
+  detail_address: 'detail_address', '详细地址': 'detail_address',
+  insurance_type: 'insurance_type', '医保类型': 'insurance_type',
+  insurance_no: 'insurance_no', '医保编号': 'insurance_no', '医保号': 'insurance_no',
+  diagnose_type: 'diagnose_type', '诊断': 'diagnose_type', '诊断类型': 'diagnose_type',
+}
+
 function fillFromRecognized(data: Record<string, string>) {
-  if (data.patient_name) form.value.patient_name = data.patient_name
-  if (data.gender) form.value.gender = data.gender
-  if (data.age) form.value.age = data.age
-  if (data.phone) form.value.phone = data.phone
-  uni.showToast({ title: '识别完成，请核对', icon: 'success' })
+  let filled = 0
+  for (const [k, v] of Object.entries(data)) {
+    if (!v) continue
+    const key = FIELD_MAP[k] || FIELD_MAP[String(k).trim()]
+    if (key && form.value[key] !== undefined) {
+      form.value[key] = v
+      filled++
+    }
+  }
+  if (filled > 0) {
+    uni.showToast({ title: `已自动填入 ${filled} 项，请核对`, icon: 'success' })
+  }
+  else {
+    uni.showToast({ title: '未识别到可填入的表单字段', icon: 'none' })
+  }
+}
+
+/** 上传图片到服务器，返回可访问 URL */
+function uploadToServer(filePath: string, onSuccess: (url: string) => void) {
+  uni.showLoading({ title: '上传中...' })
+  uni.uploadFile({
+    url: `${BASE_URL}/api/v1/cpx/doctor/upload/image`,
+    filePath,
+    name: 'file',
+    header: { Authorization: `Bearer ${userStore.getAccessToken() || ''}` },
+    success: (up) => {
+      uni.hideLoading()
+      try {
+        const d = JSON.parse(up.data)
+        if (d.code === 0 && d.data?.url) onSuccess(d.data.url)
+        else uni.showToast({ title: d.msg || '上传失败', icon: 'none' })
+      }
+      catch { uni.showToast({ title: '上传失败', icon: 'none' }) }
+    },
+    fail: () => { uni.hideLoading(); uni.showToast({ title: '上传失败', icon: 'none' }) },
+  })
+}
+
+/** 图片识别：上传 → 后端通义千问 Vision → 回填 */
+function recognizeFromImage(filePath: string) {
+  uni.showLoading({ title: 'AI 识别中...' })
+  uploadToServer(filePath, async (url) => {
+    try {
+      const result = await http.Post('/cpx/doctor/ai/recognize', { image_url: url }) as Record<string, string>
+      fillFromRecognized(result)
+    }
+    catch {
+      uni.hideLoading()
+      uni.showToast({ title: 'AI 识别失败，请重试', icon: 'none' })
+    }
+  })
+}
+
+/** 已拿到图片 URL 后统一识别回填 */
+async function recognizeImage(url: string) {
+  uni.showLoading({ title: 'AI 识别中...' })
+  try {
+    const result = await http.Post('/cpx/doctor/ai/recognize', { image_url: url }) as Record<string, string>
+    fillFromRecognized(result)
+  }
+  catch {
+    uni.hideLoading()
+    uni.showToast({ title: 'AI 识别失败，请重试', icon: 'none' })
+  }
+}
+
+// #ifdef H5
+// ── H5 专属：原生 input 选图（同步 click 保留用户激活，绕开 uni.chooseImage 在异步回调被浏览器拦截）──
+let _h5Input: HTMLInputElement | null = null
+function pickImageH5(onGot: (file: File) => void) {
+  if (!_h5Input) {
+    _h5Input = document.createElement('input')
+    _h5Input.type = 'file'
+    _h5Input.accept = 'image/*'
+    _h5Input.style.display = 'none'
+    document.body.appendChild(_h5Input)
+  }
+  _h5Input.onchange = () => {
+    const f = _h5Input!.files?.[0]
+    _h5Input!.value = ''
+    if (f) onGot(f)
+  }
+  _h5Input.click()
+}
+function uploadFileH5(file: File, onSuccess: (url: string) => void) {
+  uni.showLoading({ title: '上传中...' })
+  const form = new FormData()
+  form.append('file', file)
+  const xhr = new XMLHttpRequest()
+  xhr.open('POST', `${BASE_URL}/api/v1/cpx/doctor/upload/image`)
+  xhr.setRequestHeader('Authorization', `Bearer ${userStore.getAccessToken() || ''}`)
+  xhr.onload = () => {
+    uni.hideLoading()
+    try {
+      const d = JSON.parse(xhr.responseText)
+      if (d.code === 0 && d.data?.url) onSuccess(d.data.url)
+      else uni.showToast({ title: d.msg || '上传失败', icon: 'none' })
+    }
+    catch { uni.showToast({ title: '上传失败', icon: 'none' }) }
+  }
+  xhr.onerror = () => { uni.hideLoading(); uni.showToast({ title: '上传失败', icon: 'none' }) }
+  xhr.send(form)
+}
+// #endif
+
+/** 文字解析：调用后端 ai/recognize {text} 提取患者信息回填 */
+async function recognizeFromText(text: string) {
+  uni.showLoading({ title: 'AI 解析中...' })
+  try {
+    const result = await http.Post('/cpx/doctor/ai/recognize', { text }) as Record<string, string>
+    fillFromRecognized(result)
+  }
+  catch {
+    uni.hideLoading()
+    uni.showToast({ title: 'AI 解析失败，请重试', icon: 'none' })
+  }
 }
 
 /** AI 智能录入主入口 */
 function aiEntry() {
+  // #ifdef H5
+  // H5：文件选择必须在用户激活内触发，选图类统一走原生 input 同步 click
+  uni.showActionSheet({
+    itemList: ['证件扫描', '语音输入', '照片拍摄', '本地上传'],
+    success: (res) => {
+      if (res.tapIndex === 1) {
+        voiceInput()
+        return
+      }
+      pickImageH5((file) => uploadFileH5(file, (url) => recognizeImage(url)))
+    },
+  })
+  return
+  // #endif
+  // #ifndef H5
   uni.showActionSheet({
     itemList: ['证件扫描', '语音输入', '照片拍摄', '本地上传'],
     success: (res) => {
@@ -84,6 +232,7 @@ function aiEntry() {
       else imageRecognize('album')
     },
   })
+  // #endif
 }
 
 /** 证件扫描：身份证/医保卡 → 照片拍摄/本地上传 → OCR 回填 */
@@ -94,80 +243,43 @@ function idCardEntry() {
   })
 }
 
-/** 调起摄像头拍照（H5 用 input capture 强制相机；App/小程序用原生相机） */
-function pickCameraPhoto(onGot: () => void) {
-  // #ifdef H5
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = 'image/*'
-  input.capture = 'environment'
-  input.style.display = 'none'
-  input.onchange = () => { onGot(); document.body.removeChild(input) }
-  document.body.appendChild(input)
-  input.click()
-  // #endif
-  // #ifndef H5
-  uni.chooseImage({ count: 1, sourceType: ['camera'], success: onGot })
-  // #endif
-}
-
-function pickAlbumPhoto(onGot: () => void) {
-  uni.chooseImage({ count: 1, sourceType: ['album'], success: onGot })
-}
-
 function chooseIdCardSource(cardType: string) {
   uni.showActionSheet({
     itemList: ['照片拍摄', '本地上传'],
     success: (res) => {
-      const recognize = () => {
-        uni.showLoading({ title: '证件识别中...' })
-        setTimeout(() => {
-          uni.hideLoading()
-          fillFromRecognized({ patient_name: '识别-张三', gender: '男', age: '56', phone: '' })
-          uni.showToast({ title: `${cardType}识别完成`, icon: 'success' })
-        }, 1200)
-      }
-      if (res.tapIndex === 0) pickCameraPhoto(recognize)
-      else pickAlbumPhoto(recognize)
+      const sourceType = res.tapIndex === 0 ? 'camera' : 'album'
+      uni.chooseImage({
+        count: 1,
+        sourceType: [sourceType],
+        success: (chooseRes) => {
+          uni.showLoading({ title: `${cardType}识别中...` })
+          recognizeFromImage(chooseRes.tempFilePaths[0])
+        },
+      })
     },
   })
 }
 
-/** AI 语音识别：语音转文字 → 解析姓名/电话回填（模拟） */
+/** AI 语音识别：输入文本 → 后端 ai/recognize 提取患者信息回填（真实解析） */
 function voiceInput() {
   uni.showModal({
     title: 'AI 语音录入',
     editable: true,
-    placeholderText: '长按录音转文字（模拟），或直接输入：如「患者李四，男，58岁，电话13812345678」',
+    placeholderText: '输入如：「患者李四，男，58岁，电话13812345678」',
     success: (res) => {
       if (!res.confirm || !res.content) return
-      const t = res.content
-      const data: Record<string, string> = {}
-      const nameMatch = t.match(/(?:患者|姓名)?\s*([\u4e00-\u9fa5]{2,4})(?:，|,|男|女)/)
-      if (nameMatch) data.patient_name = nameMatch[1]
-      if (t.includes('男')) data.gender = '男'
-      else if (t.includes('女')) data.gender = '女'
-      const ageMatch = t.match(/(\d{1,3})岁/)
-      if (ageMatch) data.age = ageMatch[1]
-      const phoneMatch = t.match(/1[3-9]\d{9}/)
-      if (phoneMatch) data.phone = phoneMatch[1]
-      if (Object.keys(data).length) fillFromRecognized(data)
-      else uni.showToast({ title: '未识别到有效信息', icon: 'none' })
+      recognizeFromText(res.content)
     },
   })
 }
 
-/** 图片识别：照片拍摄/本地上传 → OCR 提取姓名/电话回填（模拟） */
+/** 图片识别：照片拍摄/本地上传 → OCR 回填（真实调用） */
 function imageRecognize(sourceType: 'camera' | 'album') {
-  const recognize = () => {
-    uni.showLoading({ title: '图片识别中...' })
-    setTimeout(() => {
-      uni.hideLoading()
-      fillFromRecognized({ patient_name: '识别-王五', gender: '', age: '61', phone: '13912345678' })
-    }, 1200)
-  }
-  if (sourceType === 'camera') pickCameraPhoto(recognize)
-  else pickAlbumPhoto(recognize)
+  uni.chooseImage({
+    count: 1,
+    sourceType: [sourceType],
+    success: (chooseRes) => recognizeFromImage(chooseRes.tempFilePaths[0]),
+  })
 }
 
 // ── 定位（发病地址）：H5 浏览器原生定位，失败自动降级 IP 定位；App/小程序用地图选择 ──

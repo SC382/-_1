@@ -434,19 +434,34 @@ function voiceInputManual() {
 
 /** 将 AI 识别结果回填到 form_data（按 field_code 匹配） */
 function fillFormData(info: Record<string, string>) {
-  const fieldMap: Record<string, string> = {
-    patient_name: 'patient_name', gender: 'gender', age: 'age',
-    phone: 'phone', come_type: 'come_type', onset_address: 'onset_address', id_type: 'id_type',
+  // AI 返回字段（标准编码/中文名）→ 模板表单 field_code 动态映射
+  const fieldAlias: Record<string, string> = {
+    patient_name: 'patient_name', '姓名': 'patient_name', '患者姓名': 'patient_name',
+    gender: 'gender', '性别': 'gender',
+    age: 'age', '年龄': 'age',
+    birth_date: 'birth_date', '出生日期': 'birth_date',
+    id_number: 'id_number', '身份证号': 'id_number',
+    id_type: 'id_type', '证件类型': 'id_type',
+    phone: 'phone', '联系电话': 'phone', '电话': 'phone',
+    come_type: 'come_type', '来院方式': 'come_type',
+    onset_address: 'onset_address', '发病地址': 'onset_address',
+    detail_address: 'detail_address', '详细地址': 'detail_address',
+    insurance_type: 'insurance_type', '医保类型': 'insurance_type',
+    insurance_no: 'insurance_no', '医保编号': 'insurance_no', '医保号': 'insurance_no',
+    chief_complaint: 'chief_complaint', '主诉': 'chief_complaint',
+    diagnose_type: 'diagnose_type', '诊断': 'diagnose_type',
   }
   let filled = 0
   const details: string[] = []
-  Object.entries(fieldMap).forEach(([apiField, code]) => {
-    if (info[apiField] && formData[code] !== undefined) {
-      formData[code] = info[apiField]
+  for (const [k, v] of Object.entries(info)) {
+    if (!v) continue
+    const code = fieldAlias[k] || fieldAlias[String(k).trim()]
+    if (code && formData[code] !== undefined) {
+      formData[code] = v
       filled++
-      details.push(`${apiField}=${info[apiField]}`)
+      details.push(`${code}=${v}`)
     }
-  })
+  }
   if (filled > 0) {
     uni.showModal({
       title: 'AI 识别完成',

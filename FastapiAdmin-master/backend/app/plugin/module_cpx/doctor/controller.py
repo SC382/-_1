@@ -23,6 +23,44 @@ from app.plugin.module_cpx.doctor.schema import (
 )
 from app.plugin.module_cpx.doctor.service import DoctorService
 from app.plugin.module_cpx.log.service import LogService, get_client_ip
+
+
+def _resolve_image_data_uri(image_url: str) -> str:
+    """把图片 URL 转成 base64 data URI（DeepSeek/千问服务器拉不到本地图片，必须内联）。
+
+    - data: 开头 → 原样
+    - 本机地址（127.0.0.1/localhost/局域网 IP）或 /static 相对路径 → 读磁盘文件转 base64
+    - 公网 http(s) → 原样透传（模型服务自行下载）
+    """
+    import base64 as _b64
+    import mimetypes
+    from pathlib import Path as _Path
+    from urllib.parse import urlparse
+
+    from app.config.path_conf import STATIC_DIR
+
+    if image_url.startswith("data:"):
+        return image_url
+    path = image_url
+    if "://" in path:
+        parsed = urlparse(path)
+        host = (parsed.hostname or "").lower()
+        if host in ("127.0.0.1", "localhost", "0.0.0.0", "::1") or host.startswith("192.168.") or host.startswith("10.") or host.startswith("172."):
+            path = parsed.path
+        else:
+            return image_url
+    # 去掉 /api/v1/static/ 或 /static/ 前缀，映射到磁盘 STATIC_DIR
+    if "/api/v1/static/" in path:
+        path = path.split("/api/v1/static/", 1)[1]
+    elif "/static/" in path:
+        path = path.split("/static/", 1)[1]
+    else:
+        return image_url
+    f = STATIC_DIR / path
+    if f.exists() and f.is_file():
+        mime = mimetypes.guess_type(str(f))[0] or "image/png"
+        return f"data:{mime};base64,{_b64.b64encode(f.read_bytes()).decode()}"
+    return image_url
 from app.api.v1.module_ai.kb.service import KbService
 
 DoctorRouter = APIRouter(prefix="/doctor", tags=["医生端"])
@@ -445,46 +483,52 @@ async def ai_recognize_controller(
         raise CustomException(msg="请提供 image_url 或 text 参数")
 
     if image_url:
-        # 图片识别：调用通义千问 Vision 模型
+        # 图片识别：AI 自主判断图片中的字段并提取
         prompt = (
-            "你是一个严格的医疗文字识别助手。请仔细阅读这张图片中的所有文字。\n\n"
+            "你是医疗信息提取助手。请仔细识别这张图片中的所有文字，提取与患者相关的全部信息。\n\n"
             "规则（必须严格遵守）：\n"
-            "1. **只提取图片中明确可见、清晰可读的文字信息**，绝对不要编造、推测或补充任何图片中没有的内容\n"
-            "2. 如果某个字段在图片中找不到对应的文字，该字段必须返回空字符串\"\"\n"
-            "3. 如果图片中完全没有任何可识别的患者信息，所有字段都返回空字符串\n"
-            "4. 提取的内容必须与图片文字**完全一致**，不要修改、润色或重新组织\n\n"
-            "请提取以下字段（找不到就返回\"\"）：\n"
-            "- patient_name：患者姓名（图片中写的什么就是什么）\n"
-            "- gender：性别（男/女）\n"
-            "- age：年龄（图片中写的数字）\n"
-            "- phone：电话号码（图片中写的手机号）\n"
-            "- come_type：来院方式（120/自行/转诊）\n"
-            "- onset_address：发病地址（图片中写的地址）\n"
-            "- id_type：证件类型（身份证/社保卡/其他）\n\n"
+            "1. 只提取图片中明确可见、清晰可读的信息，绝不编造、推测或补充图片中没有的内容\n"
+            "2. **由你自主判断**：图片里出现了哪些字段就提取哪些，输出 JSON 对象的 key 使用标准字段编码；"
+            "图片中没有的字段一律不要输出\n"
+            "3. 提取内容必须与图片文字完全一致，不要修改、润色或重新组织\n\n"
+            "标准字段编码（按实际出现的情况输出，可自由增补）：\n"
+            "- patient_name 姓名｜gender 性别｜age 年龄｜birth_date 出生日期\n"
+            "- id_number 身份证号｜id_type 证件类型｜phone 联系电话\n"
+            "- come_type 来院方式（120/自行/转诊）｜onset_address 发病地址｜detail_address 详细地址\n"
+            "- insurance_type 医保类型｜insurance_no 医保编号\n"
+            "- chief_complaint 主诉｜diagnosis 诊断｜ecg_time 心电图时间\n\n"
             "只返回纯JSON对象，不要包含任何解释、标注或markdown格式。"
         )
         messages = [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": image_url}},
+            {"type": "image_url", "image_url": {"url": _resolve_image_data_uri(image_url)}},
             {"type": "text", "text": prompt},
         ]}]
-        model = settings.OPENAI_VISION_MODEL or "qwen-vl-plus"
+        model = settings.OPENAI_VISION_MODEL or "deepseek-v4-flash-vision-exp"
     else:
-        # 文字解析：调用通义千问对话模型
+        # 文字解析：AI 自主判断文本中的字段并提取
         prompt = (
-            "你是医疗信息提取助手。从以下文字中提取患者基本信息，"
-            "只返回JSON（无解释无markdown）：patient_name, gender, age, phone, come_type, onset_address, id_type。"
-            "未出现的字段留空字符串。\n\n" + text
+            "你是医疗信息提取助手。从以下文字中提取患者相关信息。\n\n"
+            "规则：\n"
+            "1. 只提取文字中明确出现的信息，绝不编造；没有出现的信息不要输出\n"
+            "2. 由你自主判断文本中包含哪些字段，输出 JSON 对象，key 使用标准字段编码（如 patient_name 姓名、"
+            "gender 性别、age 年龄、birth_date 出生日期、id_number 身份证号、phone 电话、come_type 来院方式、"
+            "onset_address 发病地址、detail_address 详细地址、insurance_no 医保编号 等），可自由增补\n"
+            "3. 只返回纯JSON，无解释无markdown\n\n"
+            f"文字内容：{text}"
         )
         messages = [{"role": "user", "content": prompt}]
-        model = settings.OPENAI_MODEL or "qwen-plus"
+        model = settings.OPENAI_TEXT_MODEL or settings.OPENAI_MODEL or "qwen-plus"
 
-    if not settings.OPENAI_API_KEY:
-        raise CustomException(msg="未配置 AI API Key")
+    # 识别平台：配了 OPENAI_VISION_BASE_URL 走它（如 DeepSeek 视觉），否则走千问；Key 优先视觉专用 → DeepSeek → 千问
+    base_url = settings.OPENAI_VISION_BASE_URL or settings.OPENAI_BASE_URL
+    api_key = settings.OPENAI_VISION_API_KEY or settings.DEEPSEEK_API_KEY or settings.OPENAI_API_KEY
+    if not api_key or api_key.startswith("sk-placeholder"):
+        raise CustomException(msg="未配置 AI API Key（请配置 OPENAI_API_KEY 或 DEEPSEEK_API_KEY）")
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                settings.OPENAI_BASE_URL.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"},
+                base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"model": model, "messages": messages, "max_tokens": 1000, "temperature": 0.1},
             )
             resp.raise_for_status()
@@ -504,8 +548,8 @@ async def ai_recognize_controller(
             raw = raw[4:].strip()
     try:
         result = json.loads(raw)
-        for f in ["patient_name", "gender", "age", "phone", "come_type", "onset_address", "id_type"]:
-            result.setdefault(f, "")
+        if not isinstance(result, dict):
+            raise json.JSONDecodeError("not dict", raw, 0)
         return SuccessResponse(data=result, msg="AI 识别成功")
     except json.JSONDecodeError:
         return SuccessResponse(data={"raw_text": content}, msg="AI 返回文本（请核对）")

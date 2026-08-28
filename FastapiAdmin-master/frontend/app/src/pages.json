@@ -2,7 +2,7 @@
   "globalStyle": {
     "navigationBarBackgroundColor": "@navBgColor",
     "navigationBarTextStyle": "@navTxtStyle",
-    "navigationBarTitleText": "胸痛中心平台",
+    "navigationBarTitleText": "胸痛管理中心",
     "backgroundColor": "@bgColor",
     "backgroundTextStyle": "@bgTxtStyle",
     "backgroundColorTop": "@bgColorTop",
@@ -39,6 +39,7 @@
         "navigationBarTitleText": "胸痛学院"
       }
     },
+    // #ifdef APP
     {
       "path": "pages/ai/index",
       "type": "page",
@@ -48,6 +49,19 @@
         "navigationBarTitleText": "认证帮扶问答"
       }
     },
+    // #endif
+    // #ifdef H5
+    {
+      "path": "pages/ai/index",
+      "type": "page",
+      "name": "ai",
+      "layout": "tabbar",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "鲲仑·平安"
+      }
+    },
+    // #endif
     {
       "path": "pages/ai/ocr",
       "type": "page",
@@ -239,14 +253,6 @@
       }
     },
     {
-      "path": "pages/triage/index",
-      "type": "page",
-      "name": "triage",
-      "style": {
-        "navigationBarTitleText": "智慧急诊预检分诊"
-      }
-    },
-    {
       "path": "pages/unit/index",
       "type": "page",
       "name": "unit",
@@ -290,7 +296,17 @@
       "style": {
         "navigationBarTitleText": "注册"
       }
+    },
+    // #ifdef H5
+    {
+      "path": "pages/daily-report/index",
+      "type": "page",
+      "name": "daily-report",
+      "style": {
+        "navigationBarTitleText": "今日报告"
+      }
     }
+    // #endif
   ],
   "subPackages": [
     {

@@ -245,7 +245,47 @@ async def main() -> None:
                 inserted_audits += 1
 
         print(f"[完成] 新增病例 {inserted_cases} 条、审核记录 {inserted_audits} 条、病例详情 {inserted_cases} 条")
-        print("刷新 Web 首页即可看到真实数据（趋势图/审核环图/医院排行/KPI）。")
+
+        # ── 为已通过病例生成随访计划（1/3/6/12 月，幂等）──
+        fu_count = (await conn.execute(text("SELECT COUNT(*) FROM follow_up"))).scalar() or 0
+        if fu_count > 0:
+            print(f"[跳过] follow_up 已有 {fu_count} 条，不重复生成")
+        else:
+            approved = (await conn.execute(text(
+                "SELECT id, patient_name, hospital_id, doctor_id, create_time FROM case_record WHERE status='approved' ORDER BY create_time"
+            ))).fetchall()
+            now_dt = datetime.now()
+            meds = ["阿司匹林+替格瑞洛+阿托伐他汀", "双抗+他汀+β受体阻滞剂", "阿司匹林+氯吡格雷+瑞舒伐他汀"]
+            risks = ["血压控制良好", "血糖稳定，戒烟中", "血脂达标，规律运动", "控制欠佳，需加强随访"]
+            fu_inserted = 0
+            for cid, pname, hid, did, ct in approved:
+                for plan_month in (1, 3, 6, 12):
+                    y = ct.year + (ct.month - 1 + plan_month) // 12
+                    m = (ct.month - 1 + plan_month) % 12 + 1
+                    due = datetime(y, m, min(ct.day, 28), 10, 0)
+                    if due < now_dt:
+                        if random.random() < 0.7:
+                            fd = due + timedelta(days=random.randint(-2, 10))
+                            status, follow_status, follow_date = "submitted", "followed", fd
+                        else:
+                            status, follow_status, follow_date = "overdue", "unfollowed", None
+                    else:
+                        status, follow_status, follow_date = "pending", "unfollowed", None
+                    await conn.execute(
+                        text("""INSERT INTO follow_up
+                            (case_id, patient_name, hospital_id, doctor_id, plan_month, due_date, status,
+                             follow_date, follow_status, survival_status, risk_control, medication, remark, create_time, update_time)
+                            VALUES (:c,:p,:h,:d,:m,:due,:st,:fd,:fs,:surv,:risk,:med,:rmk,:ct,:ct)"""),
+                        {"c": cid, "p": pname, "h": hid, "d": did, "m": plan_month, "due": due, "st": status,
+                         "fd": follow_date, "fs": follow_status,
+                         "surv": "alive" if random.random() < 0.95 else "unknown",
+                         "risk": random.choice(risks), "med": random.choice(meds),
+                         "rmk": "系统自动生成随访计划", "ct": datetime.now()},
+                    )
+                    fu_inserted += 1
+            print(f"[完成] 生成随访计划 {fu_inserted} 条")
+
+        print("刷新 Web 首页即可看到真实数据（趋势图/审核环图/医院排行/KPI），App 随访管理页也有数据。")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ type _LocationUrl =
   "/pages/case/fill" |
   "/pages/case/time" |
   "/pages/case/timeline" |
+  "/pages/daily-report/index" |
   "/pages/ecg/detail" |
   "/pages/ecg/index" |
   "/pages/ecg/upload" |
@@ -27,7 +28,6 @@ type _LocationUrl =
   "/pages/meeting/preview" |
   "/pages/mine/index" |
   "/pages/selfcheck/index" |
-  "/pages/triage/index" |
   "/pages/unit/index" |
   "/pages/work/index" |
   "/pages/login/forget/index" |

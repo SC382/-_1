@@ -21,7 +21,7 @@ export default defineUniPages({
     // 导航栏配置
     navigationBarBackgroundColor: '@navBgColor',
     navigationBarTextStyle: '@navTxtStyle',
-    navigationBarTitleText: 'FastapiAdmin',
+    navigationBarTitleText: '胸痛管理中心',
 
     // 页面背景配置
     backgroundColor: '@bgColor',

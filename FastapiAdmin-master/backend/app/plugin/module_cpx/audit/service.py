@@ -19,6 +19,7 @@ from app.plugin.module_cpx.models import (
     AuditRecordModel,
     CaseDetailModel,
     CaseRecordModel,
+    FollowUpModel,
     TemplateFieldModel,
 )
 
@@ -272,6 +273,26 @@ class AuditService:
             audit_time=datetime.now(),
         )
         self.db.add(record)
+
+        # 审核通过 → 自动将病例填入随访档案，生成 1/3/6/12 月随访计划（幂等：已有随访则跳过）
+        exists = await self.db.execute(
+            select(FollowUpModel.id).where(FollowUpModel.case_id == case.id)
+        )
+        if not exists.scalars().first():
+            base = case.update_time or case.create_time or datetime.now()
+            for month in (1, 3, 6, 12):
+                self.db.add(
+                    FollowUpModel(
+                        case_id=case.id,
+                        patient_name=case.patient_name,
+                        hospital_id=case.hospital_id,
+                        doctor_id=case.doctor_id,
+                        plan_month=month,
+                        due_date=base + timedelta(days=month * 30),
+                        status="pending",
+                    )
+                )
+
         await self.db.flush()
         return {"id": case.id, "status": case.status}
 

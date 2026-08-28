@@ -7,15 +7,15 @@ export interface TabbarItem {
 }
 
 const tabbarItems = ref<TabbarItem[]>([
-  { name: 'home', active: true, titleKey: 'common.tab.home', icon: '/static/tab/home_gray.png' },
-  { name: 'ai', active: false, titleKey: 'common.tab.ai', icon: '/static/tab/chat_gray.png' },
-  { name: 'mine', active: false, titleKey: 'common.tab.mine', icon: '/static/tab/user_gray.png' },
+  { name: 'home', active: true, titleKey: 'common.tab.home', icon: '/static/tab/home_gray.svg' },
+  { name: 'ai', active: false, titleKey: 'common.tab.ai', icon: '/static/tab/chat_gray.svg' },
+  { name: 'mine', active: false, titleKey: 'common.tab.mine', icon: '/static/tab/user_gray.svg' },
 ])
 
 const tabbarIconsActive = {
-  home: '/static/tab/home_active.png',
-  ai: '/static/tab/chat_active.png',
-  mine: '/static/tab/user_active.png',
+  home: '/static/tab/home_active.svg',
+  ai: '/static/tab/chat_active.svg',
+  mine: '/static/tab/user_active.svg',
 }
 
 export function useTabbar() {

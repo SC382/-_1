@@ -40,7 +40,7 @@ export default {
   <slot />
   <wd-gap
     safe-area-bottom
-    height="52px"
+    height="36px"
     custom-class="tabbar-gap"
   />
   <wd-tabbar
@@ -50,25 +50,31 @@ export default {
     <wd-tabbar-item
       v-for="(item, index) in tabbarList" :key="index" :name="item.name"
       :value="getTabbarItemValue(item.name)" :icon="item.icon"
-      :text="t(item.titleKey)" :custom-class="index === 1 ? 'tabbar-mid' : ''"
+      :custom-class="index === 1 ? 'tabbar-mid' : ''"
     />
   </wd-tabbar>
 </template>
 
 <style lang="scss">
-/* 底部导航：图标 + 文字标签；中间 AI Tab 改为蓝色渐变矩形 + 白色 "Ai" 字样 */
+/* 底部导航：纯线性 outline 图标，无文字标签；中间 AI Tab 改为蓝色渐变矩形 + 白色 "Ai" 字样 */
 .app-tabbar {
-  --wot-tabbar-height: 52px;
-  --wot-tabbar-item-icon-size: 32px;
-  --wot-tabbar-item-font-size: 18px;
+  --wot-tabbar-height: 44px;
+  --wot-tabbar-item-icon-size: 28px;
   --wot-tabbar-item-color-active: #2563eb;
   --wot-tabbar-item-color-inactive: #9ca3af;
+  :deep(.wd-tabbar-item__body) {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
   :deep(.wd-tabbar-item__body-icon) {
     image {
-      width: 32px !important;
-      height: 32px !important;
+      width: 28px !important;
+      height: 28px !important;
       display: block;
     }
+  }
+  :deep(.wd-tabbar-item__text) {
+    display: none !important;
   }
   /* 中间 AI Tab：蓝色渐变矩形 + "Ai" 字样（与左右图标同高对齐） */
   :deep(.wd-tabbar-item.tabbar-mid) {
@@ -80,7 +86,6 @@ export default {
       display: flex;
       align-items: center;
       justify-content: center;
-      transform: translateY(2px);
       image {
         display: none !important;
       }
@@ -92,10 +97,6 @@ export default {
       font-weight: 700;
       line-height: 1;
       letter-spacing: -0.5px;
-    }
-    .wd-tabbar-item__text {
-      color: #2563eb;
-      font-weight: 600;
     }
   }
 }

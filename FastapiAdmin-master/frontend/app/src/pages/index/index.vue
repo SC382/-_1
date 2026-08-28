@@ -101,7 +101,7 @@ const entries = ref([
   { icon: '/static/icons/nav_meeting.svg', title: '三会模板', url: '/pages/meeting/index' },
   { icon: '/static/icons/nav_academy.svg', title: '胸痛学院', url: '/pages/academy/index' },
   { icon: '/static/icons/nav_ecg.svg', title: '远程心电', url: '/pages/ecg/index' },
-  { icon: '/static/icons/nav_triage.svg', title: '智慧急诊', url: '/pages/triage/index' },
+  { icon: '/static/icons/nav_report.svg', title: '今日报告', url: '/pages/daily-report/index' },
 ])
 
 function goEntry(e: { url?: string }) {
@@ -128,11 +128,13 @@ function handleLogout() {
 
 /** 点击统计数字 → 跳转数据直报页并自动筛选对应状态 */
 function goStatCase(status: string) {
-  // 今日新增：跳过去按"今日"日期范围筛选；其余按状态值筛选
+  // 今日新增：跳过去按"今日"日期范围筛选；其余按状态值筛选（storage + URL 双保险）
   if (status === 'today') {
+    uni.setStorageSync('workFilter', { range: 'today', status: '' })
     uni.navigateTo({ url: '/pages/work/index?range=today' })
   }
   else {
+    uni.setStorageSync('workFilter', { range: '', status })
     uni.navigateTo({ url: `/pages/work/index?status=${status}` })
   }
 }
