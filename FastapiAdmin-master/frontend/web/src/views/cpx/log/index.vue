@@ -3,6 +3,8 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import HospitalAPI, { type HospitalTable } from "@/api/cpx/hospital";
 import LogAPI, { type LogTable, type RoleOption } from "@/api/cpx/log";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxLog" });
 
@@ -103,17 +105,25 @@ onMounted(async () => {
 <template>
   <div class="cpx-page p-4">
     <ElCard shadow="never" class="mb-4">
-      <div class="mb-3 flex flex-wrap items-center gap-3">
-        <ElInput v-model="query.user_name" placeholder="操作用户姓名" clearable class="w-40" @keyup.enter="handleSearch" />
-        <ElSelect v-model="query.role_id" placeholder="用户角色" clearable class="w-32">
-          <ElOption v-for="r in roleOptions" :key="r.id" :label="r.role_name" :value="r.id" />
-        </ElSelect>
-        <ElSelect v-model="query.hospital_id" placeholder="所属医院" clearable filterable class="w-44">
-          <ElOption v-for="h in hospitalOptions" :key="h.id" :label="h.hospital_name" :value="h.id" />
-        </ElSelect>
-        <ElSelect v-model="query.module" placeholder="操作模块" clearable class="w-36">
-          <ElOption v-for="m in MODULE_OPTIONS" :key="m" :label="m" :value="m" />
-        </ElSelect>
+      <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <FaSearchItem label="操作用户">
+          <FaSearchInput v-model="query.user_name" placeholder="操作用户姓名" clearable class="w-40" @keyup.enter="handleSearch" />
+        </FaSearchItem>
+        <FaSearchItem label="用户角色">
+          <ElSelect v-model="query.role_id" placeholder="用户角色" clearable class="w-32">
+            <ElOption v-for="r in roleOptions" :key="r.id" :label="r.role_name" :value="r.id" />
+          </ElSelect>
+        </FaSearchItem>
+        <FaSearchItem label="所属医院">
+          <ElSelect v-model="query.hospital_id" placeholder="所属医院" clearable filterable class="w-44">
+            <ElOption v-for="h in hospitalOptions" :key="h.id" :label="h.hospital_name" :value="h.id" />
+          </ElSelect>
+        </FaSearchItem>
+        <FaSearchItem label="操作模块">
+          <ElSelect v-model="query.module" placeholder="操作模块" clearable class="w-36">
+            <ElOption v-for="m in MODULE_OPTIONS" :key="m" :label="m" :value="m" />
+          </ElSelect>
+        </FaSearchItem>
         <ElButton type="primary" @click="handleSearch">查询</ElButton>
         <ElButton @click="handleReset">重置</ElButton>
       </div>

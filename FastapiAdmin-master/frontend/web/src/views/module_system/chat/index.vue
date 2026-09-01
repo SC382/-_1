@@ -3,11 +3,7 @@
     <!-- 左：会话列表 -->
     <div class="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl border border-(--el-border-color-lighter) bg-(--el-bg-color)">
       <div class="flex gap-2 border-b border-(--el-border-color-lighter) p-2.5">
-        <ElInput v-model="searchKeyword" placeholder="搜索会话" clearable size="default">
-          <template #prefix>
-            <ElIcon><Search /></ElIcon>
-          </template>
-        </ElInput>
+        <FaSearchInput v-model="searchKeyword" placeholder="搜索会话" clearable size="default" />
         <ElDropdown trigger="click" @command="handleCreate">
           <ElButton type="primary" :icon="Plus" />
           <template #dropdown>
@@ -223,7 +219,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ChatDotRound, ChatLineRound, MoreFilled, Plus, Search, UserFilled } from "@element-plus/icons-vue";
+import { ChatDotRound, ChatLineRound, MoreFilled, Plus, UserFilled } from "@element-plus/icons-vue";
 import type { ElScrollbar as ElScrollbarType } from "element-plus";
 
 import ChatAPI, {
@@ -235,6 +231,7 @@ import ChatAPI, {
 import { useUserStore } from "@stores";
 import { useChatStore } from "@/store/modules/chat.store";
 import defaultAvatar from "@imgs/avatar/avatar5.webp";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
 
 defineOptions({ name: "SystemChat" });
 

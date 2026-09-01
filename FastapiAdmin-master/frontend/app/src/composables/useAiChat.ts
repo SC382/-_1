@@ -1,3 +1,4 @@
+import { getApiBaseUrl } from '@/http'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUserStore } from '@/store/userStore'
@@ -17,7 +18,7 @@ function buildChatWsUrl(): string {
   const token = userStore.getAccessToken() || ''
   let wsBase = import.meta.env.VITE_APP_WS_ENDPOINT || ''
   if (!wsBase) {
-    const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+    const apiBase = getApiBaseUrl()
     wsBase = apiBase.replace(/^http/, 'ws')
   }
   const apiPrefix = import.meta.env.VITE_APP_BASE_API || '/api/v1'

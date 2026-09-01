@@ -62,6 +62,7 @@
       }
     },
     // #endif
+    // #ifdef APP
     {
       "path": "pages/ai/ocr",
       "type": "page",
@@ -70,6 +71,13 @@
         "navigationBarTitleText": "拍照识别录入"
       }
     },
+    // #endif
+    // #ifdef H5
+    {
+      "path": "pages/ai/ocr",
+      "type": "page"
+    },
+    // #endif
     {
       "path": "pages/ai/voice",
       "type": "page",

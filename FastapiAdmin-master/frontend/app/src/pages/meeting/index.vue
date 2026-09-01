@@ -1,5 +1,6 @@
 <!-- 三会模板：质量分析会/联合例会/典型病例讨论会 → 后台生成真实 PPT → 预览/下载 -->
 <script setup lang="ts">
+import { getApiBaseUrl } from '@/http'
 import { ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import DoctorAPI, { type CaseRecordItem } from '@/api/module_cpx/doctor'
@@ -9,7 +10,7 @@ definePage({
   style: { navigationBarTitleText: '三会模板' },
 })
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE_URL = getApiBaseUrl()
 
 const range = ref('1m')
 const generating = ref(false)

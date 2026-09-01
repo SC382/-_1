@@ -236,10 +236,16 @@ class Settings(BaseSettings):
     # AI 识别-文字解析专用模型（为空则用 OPENAI_MODEL）
     OPENAI_TEXT_MODEL: str = ""
 
-    # DeepSeek（AI 知识库问答专用，OPENAI 兼容协议；优先于 OPENAI_KB_MODEL）
+    # DeepSeek（AI 知识库问答 / 心电图AI诊断 专用，OPENAI 兼容协议；优先于 OPENAI_KB_MODEL）
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_MODEL: str = "deepseek-chat"
+
+    # 智谱大模型（图片识别 glm-4v-flash / 语音识别 glm-asr-2512，OPENAI 兼容协议）
+    ZHIPU_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
+    ZHIPU_API_KEY: str = ""
+    ZHIPU_VISION_MODEL: str = "glm-4v-flash"
+    ZHIPU_ASR_MODEL: str = "glm-asr-2512"
 
     # ================================================= #
     # ******************* 动态配置 ******************* #

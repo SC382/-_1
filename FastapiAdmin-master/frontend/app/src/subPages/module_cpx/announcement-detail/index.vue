@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { AnnouncementAPI, type AnnouncementItem } from '@/api/module_cpx/announcement'
+import { safeBack } from '@/utils/back'
 
 definePage({ name: 'announcement-detail', style: { navigationBarTitleText: '公告详情' } })
 
@@ -21,7 +22,7 @@ onLoad((options) => {
   const id = Number(options?.id)
   if (!id) {
     toast.show({ msg: '缺少公告 ID' })
-    uni.navigateBack()
+    safeBack()
     return
   }
   fetchDetail(id)
@@ -34,7 +35,7 @@ async function fetchDetail(id: number) {
   }
   catch {
     // http 层已 toast
-    setTimeout(() => uni.navigateBack(), 800)
+    setTimeout(() => safeBack(), 800)
   }
   finally {
     loading.value = false

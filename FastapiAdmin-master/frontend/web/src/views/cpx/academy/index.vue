@@ -3,6 +3,8 @@
 import { onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadRawFile } from "element-plus";
 import AcademyAPI, { type AcademyForm, type AcademyItem, type AcademyType } from "@/api/cpx/academy";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxAcademy" });
 
@@ -194,16 +196,24 @@ onMounted(fetchData);
 <template>
   <div class="cpx-page p-4">
     <ElCard shadow="never" class="mb-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <ElInput v-model="query.keyword" placeholder="标题关键字" clearable class="w-56" @keyup.enter="handleSearch" />
-        <ElSelect v-model="query.content_type" placeholder="内容类型" clearable class="w-32">
-          <ElOption v-for="o in TYPE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-        </ElSelect>
-        <ElInput v-model="query.category" placeholder="分类" clearable class="w-32" @keyup.enter="handleSearch" />
-        <ElSelect v-model="query.published" placeholder="发布状态" clearable class="w-32">
-          <ElOption label="已发布" :value="1" />
-          <ElOption label="草稿" :value="0" />
-        </ElSelect>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <FaSearchItem label="标题关键字">
+          <FaSearchInput v-model="query.keyword" placeholder="标题关键字" clearable class="w-56" @keyup.enter="handleSearch" />
+        </FaSearchItem>
+        <FaSearchItem label="内容类型">
+          <ElSelect v-model="query.content_type" placeholder="内容类型" clearable class="w-32">
+            <ElOption v-for="o in TYPE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          </ElSelect>
+        </FaSearchItem>
+        <FaSearchItem label="分类">
+          <FaSearchInput v-model="query.category" placeholder="分类" clearable class="w-32" @keyup.enter="handleSearch" />
+        </FaSearchItem>
+        <FaSearchItem label="发布状态">
+          <ElSelect v-model="query.published" placeholder="发布状态" clearable class="w-32">
+            <ElOption label="已发布" :value="1" />
+            <ElOption label="草稿" :value="0" />
+          </ElSelect>
+        </FaSearchItem>
         <ElButton type="primary" @click="handleSearch">查询</ElButton>
         <ElButton @click="handleReset">重置</ElButton>
         <div class="flex-1" />

@@ -3,6 +3,8 @@
 import { onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
 import AnnouncementAPI, { type AnnouncementForm, type AnnouncementItem, type AnnouncementStatus, type AnnouncementType } from "@/api/cpx/announcement";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxAnnouncement" });
 
@@ -179,14 +181,20 @@ onMounted(fetchData);
 <template>
   <div class="cpx-page p-4">
     <ElCard shadow="never" class="mb-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <ElInput v-model="query.keyword" placeholder="公告标题" clearable class="w-56" @keyup.enter="handleSearch" />
-        <ElSelect v-model="query.type" placeholder="公告类型" clearable class="w-36">
-          <ElOption v-for="o in TYPE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-        </ElSelect>
-        <ElSelect v-model="query.status" placeholder="状态" clearable class="w-32">
-          <ElOption v-for="o in STATUS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-        </ElSelect>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <FaSearchItem label="公告标题">
+          <FaSearchInput v-model="query.keyword" placeholder="公告标题" clearable class="w-56" @keyup.enter="handleSearch" />
+        </FaSearchItem>
+        <FaSearchItem label="公告类型">
+          <ElSelect v-model="query.type" placeholder="公告类型" clearable class="w-36">
+            <ElOption v-for="o in TYPE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          </ElSelect>
+        </FaSearchItem>
+        <FaSearchItem label="状态">
+          <ElSelect v-model="query.status" placeholder="状态" clearable class="w-32">
+            <ElOption v-for="o in STATUS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          </ElSelect>
+        </FaSearchItem>
         <ElButton type="primary" @click="handleSearch">查询</ElButton>
         <ElButton @click="handleReset">重置</ElButton>
         <div class="flex-1" />

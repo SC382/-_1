@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getApiBaseUrl } from '@/http'
 import type { UserInfo, UserProfileForm } from '@/api/module_system/user'
 import { onLoad } from '@dcloudio/uni-app'
 import { computed, reactive, ref } from 'vue'
@@ -23,7 +24,7 @@ const saving = ref(false)
 const userProfile = ref<UserInfo>()
 
 /** 头像上传：后端通用文件上传（upload_type=avatar），字段名 file */
-const uploadAvatarAction = `${import.meta.env.VITE_API_BASE_URL || ''}${import.meta.env.VITE_APP_BASE_API || ''}/common/file/upload?upload_type=avatar`
+const uploadAvatarAction = `${getApiBaseUrl()}${import.meta.env.VITE_APP_BASE_API || ''}/common/file/upload?upload_type=avatar`
 const uploadHeader = { Authorization: `Bearer ${userStore.getAccessToken() || ''}` }
 const avatarFileList = ref<{ url: string }[]>([])
 

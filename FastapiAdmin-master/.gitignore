@@ -74,3 +74,9 @@ AGENTS.md
 .codebuddy
 .agent
 .workbuddy
+
+# 历史遗留 demo 备份（本地保留，不入库）
+_backup_demo_20260826/
+
+# 运行时上传的病例/患者图片（含隐私，禁止入库；已跟踪的历史文件不受影响）
+backend/static/uploads/

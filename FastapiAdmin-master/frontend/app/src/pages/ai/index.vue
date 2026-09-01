@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, reactive, ref } from 'vue'
 import DoctorAPI, { type KbAskResult } from '@/api/module_cpx/doctor'
+import { safeBack } from '@/utils/back'
 
 definePage({
   name: 'ai',
@@ -17,6 +18,57 @@ const typing = ref(false)
 let typeTimer: ReturnType<typeof setInterval> | null = null
 
 const scrollRef = ref<HTMLDivElement>()
+
+// 语音输入：原生录音 → 后端 ASR 转写 → 填入提问框（仅 app-plus 支持原生录音，H5 降级提示）
+const recording = ref(false)
+const transcribing = ref(false)
+let recorderManager: any = null
+
+function ensureRecorder() {
+  if (recorderManager) return recorderManager
+  const rm: any = uni.getRecorderManager()
+  if (!rm) return null
+  rm.onStop((res: any) => {
+    recording.value = false
+    uni.getFileSystemManager().readFile({
+      filePath: res.tempFilePath,
+      encoding: 'base64',
+      success: async (r: any) => {
+        transcribing.value = true
+        try {
+          const data = await DoctorAPI.asr({ audio_base64: r.data as string, format: 'mp3' })
+          question.value = data.text || ''
+          uni.showToast({ title: '转写完成，可修改后发送', icon: 'none' })
+        }
+        catch (e: any) {
+          uni.showToast({ title: e?.msg || '语音识别失败', icon: 'none' })
+        }
+        finally { transcribing.value = false }
+      },
+      fail: () => uni.showToast({ title: '读取录音失败', icon: 'none' }),
+    })
+  })
+  rm.onError(() => {
+    recording.value = false
+    uni.showToast({ title: '录音失败', icon: 'none' })
+  })
+  recorderManager = rm
+  return rm
+}
+
+function toggleRecord() {
+  if ((uni.getSystemInfoSync() as any).platform !== 'app-plus') {
+    uni.showToast({ title: '请在 App 端使用录音', icon: 'none' })
+    return
+  }
+  const rm = ensureRecorder()
+  if (!rm) {
+    uni.showToast({ title: '当前环境不支持录音', icon: 'none' })
+    return
+  }
+  if (recording.value) rm.stop()
+  else { recording.value = true; rm.start({ format: 'mp3', sampleRate: 16000 }) }
+}
 
 // 问心推荐问题（参考"胸痛中心认证帮扶"高频问题）
 const QUICK_QUESTIONS = [
@@ -116,14 +168,17 @@ function onClearChat() {
   question.value = ''
 }
 
-onUnmounted(stopTyping)
+onUnmounted(() => {
+  stopTyping()
+  if (recording.value && recorderManager) recorderManager.stop()
+})
 </script>
 
 <template>
   <view class="ai-page">
     <!-- 自定义导航栏（蓝紫色） -->
     <view class="ai-header">
-      <text class="header-back" @click="uni.navigateBack">‹</text>
+      <text class="header-back" @click="() => safeBack()">‹</text>
       <text class="header-title">鲲仑·平安</text>
       <text class="header-menu" @click="onClearChat">⋯</text>
     </view>
@@ -178,7 +233,7 @@ onUnmounted(stopTyping)
 
     <!-- 底部输入栏 -->
     <view class="input-bar">
-      <view class="mic-btn">
+      <view class="mic-btn" :class="{ recording: recording || transcribing }" @click="toggleRecord">
         <image class="mic-icon" src="/static/icons/mic.svg" mode="aspectFit" />
       </view>
       <view class="input-wrap">
@@ -391,6 +446,14 @@ onUnmounted(stopTyping)
 }
 .mic-btn {
   background: #f3f4f6;
+}
+.mic-btn.recording {
+  background: #ef4444;
+  animation: mic-pulse 1s infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 .mic-icon {
   width: 30rpx;

@@ -1,8 +1,8 @@
-<!-- AI 拍照识别（模拟）：选图 → 模拟识别结构化字段 → 确认回填病例 -->
+<!-- AI 拍照识别（真实）：选图 → 智谱视觉识别结构化字段 → 确认回填病例 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import DoctorAPI, { type CaseRecordItem } from '@/api/module_cpx/doctor'
+import DoctorAPI, { type CaseRecordItem, type FieldDict } from '@/api/module_cpx/doctor'
 
 definePage({
   name: 'ai-ocr',
@@ -15,39 +15,81 @@ const imagePath = ref('')
 const recognizing = ref(false)
 const saving = ref(false)
 const templateId = ref(0)
-// 模拟识别结果（真实环境由 AI OCR 返回）
+// AI 识别结果（真实接口返回）
 const result = ref<Record<string, string>>({})
+// 字段编码 → 中文名 映射（用于识别结果标签本地化）
+const fieldNameMap = ref<Record<string, string>>({})
 
 onLoad(async () => {
   try {
-    const res = await DoctorAPI.myCases({ page_no: 1, page_size: 50 })
-    cases.value = res.items
+    const [listRes, dictRes] = await Promise.all([
+      DoctorAPI.myCases({ page_no: 1, page_size: 50 }),
+      DoctorAPI.fieldDict(),
+    ])
+    cases.value = listRes.items
+    buildFieldNameMap(dictRes)
   }
   catch { /* toast */ }
 })
+
+function buildFieldNameMap(dict: FieldDict) {
+  const map: Record<string, string> = {}
+  for (const f of dict.fields) {
+    if (f.field_code) map[f.field_code] = f.field_name || f.field_code
+  }
+  fieldNameMap.value = map
+}
+
+function labelOf(key: string): string {
+  return fieldNameMap.value[key] || key
+}
 
 function chooseImage() {
   uni.chooseImage({
     count: 1,
     success: (res) => {
       imagePath.value = res.tempFilePaths[0]
-      mockRecognize()
+      realRecognize()
     },
   })
 }
 
-/** 模拟 AI 识别（真实环境调用 OCR 接口） */
-function mockRecognize() {
+/** 真实 AI 识别：本地图片转 base64 data URI 内联 → 调后端 /cpx/doctor/ai/recognize */
+async function realRecognize() {
+  if (!imagePath.value) return
   recognizing.value = true
-  setTimeout(() => {
-    result.value = {
-      patient_name: '识别-患者姓名',
-      diagnose_type: 'STEMI',
-      onset_time: '2026-08-21 08:00',
-      chief_complaint: '胸痛伴大汗2小时',
+  try {
+    const base64 = await readFileAsBase64(imagePath.value)
+    const res = await DoctorAPI.recognize({ image_url: base64 })
+    if (res.raw_text) {
+      // 结构化解析失败，回退展示原文，提示用户手动整理
+      result.value = { raw_text: res.raw_text }
+      uni.showToast({ title: '未提取到结构化字段，请手动整理', icon: 'none' })
     }
+    else {
+      result.value = res
+    }
+  }
+  catch {
+    uni.showToast({ title: '识别失败，请重试', icon: 'none' })
+  }
+  finally {
     recognizing.value = false
-  }, 1200)
+  }
+}
+
+/** 用 uni 文件系统读取本地图片为 base64 data URI（按扩展名推断 mime） */
+function readFileAsBase64(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const ext = filePath.split('.').pop()?.toLowerCase() || 'jpg'
+    const mime = ext === 'png' ? 'image/png' : ext === 'bmp' ? 'image/bmp' : 'image/jpeg'
+    uni.getFileSystemManager().readFile({
+      filePath,
+      encoding: 'base64',
+      success: (r) => resolve(`data:${mime};base64,${r.data as string}`),
+      fail: (e) => reject(e),
+    })
+  })
 }
 
 async function handleFill() {
@@ -55,12 +97,21 @@ async function handleFill() {
     uni.showToast({ title: '请选择病例', icon: 'none' })
     return
   }
-  // 读取病例所用模板
+  // 排除非结构化原文，避免污染病例数据
+  const form: Record<string, string> = {}
+  for (const [k, v] of Object.entries(result.value)) {
+    if (k === 'raw_text') continue
+    form[k] = v
+  }
+  if (!Object.keys(form).length) {
+    uni.showToast({ title: '没有可回填的字段', icon: 'none' })
+    return
+  }
   saving.value = true
   try {
     const detail = await DoctorAPI.caseDetail(caseId.value)
     templateId.value = detail.template_id || 0
-    await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...result.value } })
+    await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: form })
     uni.showToast({ title: '已回填病例', icon: 'success' })
   }
   catch { /* toast */ }
@@ -101,15 +152,15 @@ async function handleFill() {
     <view v-if="Object.keys(result).length" class="card">
       <text class="label">{{ recognizing ? '识别中...' : '识别结果（可修改）' }}</text>
       <view v-for="(v, k) in result" :key="k" class="result-row">
-        <text class="result-key">{{ k }}</text>
+        <text class="result-key">{{ labelOf(k) }}</text>
         <input v-model="result[k]" class="result-input" />
       </view>
-      <button class="fill-btn" :disabled="saving" @click="handleFill">
+      <button class="fill-btn" :disabled="saving || recognizing" @click="handleFill">
         {{ saving ? '回填中...' : '确认回填病例' }}
       </button>
     </view>
 
-    <text class="tip">* 当前为模拟识别，接入真实 OCR 服务后自动提取字段</text>
+    <text class="tip">* 图片经 AI（智谱视觉）识别后自动提取字段，可修改后回填病例</text>
   </view>
 </template>
 
@@ -154,6 +205,9 @@ async function handleFill() {
   border-radius: 12rpx;
   height: 80rpx;
   line-height: 80rpx;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .result-input {
   flex: 1;

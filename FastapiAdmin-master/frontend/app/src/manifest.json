@@ -15,7 +15,9 @@
       "autoclose": true,
       "delay": 0
     },
-    "modules": {},
+    "modules": {
+      "Record": {}
+    },
     "distribute": {
       "android": {
         "permissions": [
@@ -33,10 +35,15 @@
           "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>",
           "<uses-permission android:name=\"android.permission.FLASHLIGHT\"/>",
           "<uses-feature android:name=\"android.hardware.camera\"/>",
-          "<uses-permission android:name=\"android.permission.WRITE_SETTINGS\"/>"
+          "<uses-permission android:name=\"android.permission.WRITE_SETTINGS\"/>",
+          "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>"
         ]
       },
-      "ios": {},
+      "ios": {
+        "privacyDescription": {
+          "NSMicrophoneUsageDescription": "用于语音录入病例信息"
+        }
+      },
       "sdkConfigs": {}
     }
   },

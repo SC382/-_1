@@ -50,17 +50,16 @@ export default {
     <wd-tabbar-item
       v-for="(item, index) in tabbarList" :key="index" :name="item.name"
       :value="getTabbarItemValue(item.name)" :icon="item.icon"
-      :custom-class="index === 1 ? 'tabbar-mid' : ''"
     />
   </wd-tabbar>
 </template>
 
 <style lang="scss">
-/* 底部导航：纯线性 outline 图标，无文字标签；中间 AI Tab 改为蓝色渐变矩形 + 白色 "Ai" 字样 */
+/* 底部导航：纯线性 outline 图标，无文字标签；中间 AI Tab 使用「鲲仑·平安」绿色笑脸机器人头像 */
 .app-tabbar {
   --wot-tabbar-height: 44px;
-  --wot-tabbar-item-icon-size: 28px;
-  --wot-tabbar-item-color-active: #2563eb;
+  --wot-tabbar-item-icon-size: 10px;
+  --wot-tabbar-item-color-active: #183fa1;
   --wot-tabbar-item-color-inactive: #9ca3af;
   :deep(.wd-tabbar-item__body) {
     padding-top: 0;
@@ -68,36 +67,13 @@ export default {
   }
   :deep(.wd-tabbar-item__body-icon) {
     image {
-      width: 28px !important;
-      height: 28px !important;
+      width: 34px !important;
+      height: 34px !important;
       display: block;
     }
   }
   :deep(.wd-tabbar-item__text) {
     display: none !important;
-  }
-  /* 中间 AI Tab：蓝色渐变矩形 + "Ai" 字样（与左右图标同高对齐） */
-  :deep(.wd-tabbar-item.tabbar-mid) {
-    .wd-tabbar-item__body-icon {
-      width: 40px;
-      height: 32px;
-      border-radius: 9px;
-      background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      image {
-        display: none !important;
-      }
-    }
-    .wd-tabbar-item__body-icon::before {
-      content: 'Ai';
-      color: #ffffff;
-      font-size: 17px;
-      font-weight: 700;
-      line-height: 1;
-      letter-spacing: -0.5px;
-    }
   }
 }
 </style>

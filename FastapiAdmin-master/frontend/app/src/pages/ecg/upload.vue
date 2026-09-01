@@ -1,5 +1,7 @@
 <!-- 远程心电：选完病例后上传心电图 → 自动 AI 诊断 → 跳详情 -->
 <script setup lang="ts">
+import { getApiBaseUrl } from '@/http'
+import { safeBack } from '@/utils/back'
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import DoctorAPI, { type CaseDetailData } from '@/api/module_cpx/doctor'
@@ -10,7 +12,7 @@ definePage({
   style: { navigationBarTitleText: '上传心电图' },
 })
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE_URL = getApiBaseUrl()
 const userStore = useUserStore()
 
 const caseId = ref(0)
@@ -24,7 +26,7 @@ onLoad(async (q) => {
   caseId.value = Number(q?.case_id || 0)
   if (!caseId.value) {
     uni.showToast({ title: '请先从病例列表选择', icon: 'none' })
-    setTimeout(() => uni.navigateBack(), 800)
+    setTimeout(() => safeBack(), 800)
     return
   }
   loading.value = true

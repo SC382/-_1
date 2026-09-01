@@ -4,6 +4,8 @@ import { onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import AuditAPI, { type AuditHistoryItem } from "@/api/cpx/audit";
 import CaseDetailDialog from "./components/CaseDetailDialog.vue";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxAuditHistory" });
 
@@ -85,8 +87,10 @@ onMounted(fetchData);
   <div class="cpx-page p-4">
     <ElCard shadow="never">
       <!-- 搜索筛选区 -->
-      <div class="mb-4 flex flex-wrap items-center gap-3">
-        <ElInput v-model="query.case_no" placeholder="病例编号（支持完整/片段检索）" clearable class="w-60" @keyup.enter="handleSearch" />
+      <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <FaSearchItem label="病例编号">
+          <FaSearchInput v-model="query.case_no" placeholder="病例编号" clearable class="w-60" @keyup.enter="handleSearch" />
+        </FaSearchItem>
         <ElButton type="primary" @click="handleSearch">查询</ElButton>
         <ElButton @click="handleReset">重置</ElButton>
         <div class="flex-1" />

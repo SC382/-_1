@@ -8,9 +8,23 @@ import { useUserStore } from '@/store/userStore'
 import { toLoginPage } from '@/utils/toLoginPage'
 import { ContentTypeEnum, HttpStatus, ResultEnum, ShowMessage } from '../tools/enum'
 
+/**
+ * 动态解析 API 基地址（任何网络下均可运行）：
+ * - H5 开发模式（DEV）：自动取当前访问页面主机 + 端口 8002 —— 换网络/电脑 IP 变更无需改配置
+ *   例：访问 http://192.168.37.159:5190/app → API = http://192.168.37.159:8002
+ *       访问 http://localhost:5190/app      → API = http://localhost:8002
+ * - 非 H5（App/小程序打包）或生产构建：使用 .env 的 VITE_API_BASE_URL
+ */
+export function getApiBaseUrl(): string {
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:8002`
+  }
+  return import.meta.env.VITE_API_BASE_URL || ''
+}
+
 // 配置动态Tag
 export const API_DOMAINS = {
-  DEFAULT: import.meta.env.VITE_API_BASE_URL || '',
+  DEFAULT: getApiBaseUrl(),
   SECONDARY: import.meta.env.VITE_SERVER_BASEURL_SECONDARY || '',
 }
 

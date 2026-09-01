@@ -1,5 +1,6 @@
 <!-- 胸痛学院：内容详情（在线查看 / 下载） -->
 <script setup lang="ts">
+import { getApiBaseUrl } from '@/http'
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import AcademyAPI, { type AcademyItem } from '@/api/module_cpx/academy'
@@ -9,7 +10,7 @@ definePage({
   style: { navigationBarTitleText: '内容详情' },
 })
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE_URL = getApiBaseUrl()
 const id = ref(0)
 const loading = ref(false)
 const item = ref<AcademyItem | null>(null)

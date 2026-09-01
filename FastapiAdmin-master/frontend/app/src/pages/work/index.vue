@@ -3,6 +3,7 @@
 import { reactive, ref } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import DoctorAPI, { type CaseRecordItem } from '@/api/module_cpx/doctor'
+import { safeBack } from '@/utils/back'
 
 definePage({
   name: 'work',
@@ -12,7 +13,7 @@ definePage({
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 0
 
 function goBack() {
-  uni.navigateBack()
+  safeBack()
 }
 
 const loading = ref(false)

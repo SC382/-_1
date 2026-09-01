@@ -1,3 +1,8 @@
+:root {
+  /* 底部自定义 tabbar 实际占位高度 = tabbar(54px) + 安全区 gap(36px)，供 .tabbar-page 内容区扣减 */
+  --tabbar-h: 54px;
+}
+
 .page-wraper {
   min-height: calc(100vh - var(--window-top));
   box-sizing: border-box;

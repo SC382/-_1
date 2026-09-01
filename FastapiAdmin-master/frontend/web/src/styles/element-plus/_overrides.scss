@@ -735,6 +735,57 @@ html.dark .el-card {
   }
 }
 
+// ── 统一搜索输入框样式：左侧放大镜 + 圆角浅灰背景 ──
+// 用于 FaSearchInput 组件以及 fa-search-bar 中的输入框
+.fa-search-input,
+.fa-search-bar {
+  .el-input__wrapper {
+    background-color: #f5f7fa !important;
+    border-radius: 8px !important;
+    box-shadow: 0 0 0 1px transparent inset !important;
+    transition: all 0.2s ease !important;
+
+    &:hover,
+    &.is-focus {
+      background-color: #ffffff !important;
+      box-shadow: 0 0 0 1px #d1d5db inset !important;
+    }
+  }
+
+  .el-input__inner {
+    color: #374151;
+
+    &::placeholder {
+      color: #9ca3af;
+    }
+  }
+
+  .el-input__icon {
+    color: #9ca3af;
+  }
+}
+
+// ── FaSearchItem：标签在左、控件在右（水平排列，不上下堆叠）──
+.fa-search-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  vertical-align: top;
+
+  .fa-search-item__label {
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 36px;
+    color: var(--el-text-color-regular);
+    white-space: nowrap;
+  }
+
+  .fa-search-item__control {
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
 // ── ElCard 卡片优化 ──
 .el-card {
   --el-card-border-radius: calc(var(--custom-radius) + 2px);

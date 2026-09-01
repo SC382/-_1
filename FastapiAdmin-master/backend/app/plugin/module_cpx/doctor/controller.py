@@ -23,6 +23,27 @@ from app.plugin.module_cpx.doctor.schema import (
 )
 from app.plugin.module_cpx.doctor.service import DoctorService
 from app.plugin.module_cpx.log.service import LogService, get_client_ip
+from app.plugin.module_cpx.fields import FIELDS as _CPX_FIELDS
+
+# ── 标准字段字典（供 AI 识别提示，与 fields.py 的 FIELDS 同步）──────────
+_TAB_NAMES = {"basic": "基本信息", "prehospital": "院前急救", "triage": "急诊分诊",
+              "exam": "检验检查", "treatment": "院内诊疗", "pci": "介入手术", "outcome": "患者转归"}
+def _build_field_dict_text() -> str:
+    if not _CPX_FIELDS:
+        return ""
+    by_tab: dict = {}
+    for f in _CPX_FIELDS:
+        by_tab.setdefault(f.get("tab", "other"), []).append(f)
+    lines = []
+    for tab, fs in by_tab.items():
+        lines.append(f"【{_TAB_NAMES.get(tab, tab)}】")
+        for f in fs:
+            opt = ""
+            if f.get("options"):
+                opt = "（可选值：" + "/".join(o["value"] for o in f["options"]) + "）"
+            lines.append(f"  - {f['code']} {f['name']}{opt}")
+    return "\n".join(lines)
+_FIELD_DICT_TEXT = _build_field_dict_text()
 
 
 def _resolve_image_data_uri(image_url: str) -> str:
@@ -485,51 +506,58 @@ async def ai_recognize_controller(
     if image_url:
         # 图片识别：AI 自主判断图片中的字段并提取
         prompt = (
-            "你是医疗信息提取助手。请仔细识别这张图片中的所有文字，提取与患者相关的全部信息。\n\n"
+            "你是胸痛中心医疗信息提取助手。请仔细识别这张图片中的全部文字（包括表头、每一栏标签及其对应数值、"
+            "所有时间节点、生命体征、诊断、用药等），提取与患者相关的信息。\n\n"
+            "标准字段编码字典（图片中出现的字段，务必用这里的 key 输出）：\n"
+            f"{_FIELD_DICT_TEXT}\n\n"
             "规则（必须严格遵守）：\n"
-            "1. 只提取图片中明确可见、清晰可读的信息，绝不编造、推测或补充图片中没有的内容\n"
-            "2. **由你自主判断**：图片里出现了哪些字段就提取哪些，输出 JSON 对象的 key 使用标准字段编码；"
-            "图片中没有的字段一律不要输出\n"
-            "3. 提取内容必须与图片文字完全一致，不要修改、润色或重新组织\n\n"
-            "标准字段编码（按实际出现的情况输出，可自由增补）：\n"
-            "- patient_name 姓名｜gender 性别｜age 年龄｜birth_date 出生日期\n"
-            "- id_number 身份证号｜id_type 证件类型｜phone 联系电话\n"
-            "- come_type 来院方式（120/自行/转诊）｜onset_address 发病地址｜detail_address 详细地址\n"
-            "- insurance_type 医保类型｜insurance_no 医保编号\n"
-            "- chief_complaint 主诉｜diagnosis 诊断｜ecg_time 心电图时间\n\n"
-            "只返回纯JSON对象，不要包含任何解释、标注或markdown格式。"
+            "1. 只提取图片中清晰可读的信息，绝不编造或推测图片里没有的内容\n"
+            "2. **全量提取**：图片中只要出现了字典里的任何字段，就提取其对应值；可跨多个区块/表格提取\n"
+            "3. **key 必须用上面的标准编码**（如 fmc_time、onset_time、balloon_time、troponin_time 等时间节点也要识别）\n"
+            "4. 图片中出现但不在字典里的字段，也请用语义化英文 key 输出，不要丢弃\n"
+            "5. 提取内容须与图片文字一致，不润色、不重组\n"
+            "6. 若字段标注了【可选值】，请把识别/判断结果**归一化到其中一个可选值**；"
+            "例如 card_type 证件类型，请依据证件上的标题文字与卡片样式判断属于 身份证 / 医保卡 / 其他\n"
+            "7. **日期格式必须统一**：日期型字段一律输出 YYYY-MM-DD（如 1968-03-12，不要写 1968年3月12日）；"
+            "日期时间型字段一律输出 YYYY-MM-DD HH:MM（如 2026-08-28 14:30）\n\n"
+            "只返回纯JSON对象，不要任何解释或markdown格式。"
         )
         messages = [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": _resolve_image_data_uri(image_url)}},
+            {"type": "image_url", "image_url": {"url": _resolve_image_data_uri(image_url), "detail": "high"}},
             {"type": "text", "text": prompt},
         ]}]
-        model = settings.OPENAI_VISION_MODEL or "deepseek-v4-flash-vision-exp"
+        model = settings.ZHIPU_VISION_MODEL or "glm-4v-flash"
+        base_url = settings.ZHIPU_BASE_URL
+        api_key = settings.ZHIPU_API_KEY
     else:
         # 文字解析：AI 自主判断文本中的字段并提取
         prompt = (
-            "你是医疗信息提取助手。从以下文字中提取患者相关信息。\n\n"
+            "你是胸痛中心医疗信息提取助手。从以下文字中提取患者相关信息。\n\n"
+            "标准字段编码字典（文字中出现的字段，请用这里的 key 输出）：\n"
+            f"{_FIELD_DICT_TEXT}\n\n"
             "规则：\n"
             "1. 只提取文字中明确出现的信息，绝不编造；没有出现的信息不要输出\n"
-            "2. 由你自主判断文本中包含哪些字段，输出 JSON 对象，key 使用标准字段编码（如 patient_name 姓名、"
-            "gender 性别、age 年龄、birth_date 出生日期、id_number 身份证号、phone 电话、come_type 来院方式、"
-            "onset_address 发病地址、detail_address 详细地址、insurance_no 医保编号 等），可自由增补\n"
-            "3. 只返回纯JSON，无解释无markdown\n\n"
+            "2. **全量提取**：只要文字里出现了字典中的任何字段，就提取其值\n"
+            "3. **key 必须用上面的标准编码**（含 fmc_time、onset_time、balloon_time、troponin_time 等时间节点）\n"
+            "4. 文字中出现但不在字典里的字段，也用语义化英文 key 输出，不要丢弃\n"
+            "5. 若字段标注了【可选值】，请把识别/判断结果归一化到其中一个可选值（如 card_type→身份证/医保卡/其他）\n"
+            "6. **日期格式必须统一**：日期型一律 YYYY-MM-DD（如 1968-03-12）；日期时间型一律 YYYY-MM-DD HH:MM\n"
+            "7. 只返回纯JSON，无解释无markdown\n\n"
             f"文字内容：{text}"
         )
         messages = [{"role": "user", "content": prompt}]
-        model = settings.OPENAI_TEXT_MODEL or settings.OPENAI_MODEL or "qwen-plus"
+        model = settings.OPENAI_TEXT_MODEL or settings.DEEPSEEK_MODEL or "deepseek-chat"
+        base_url = settings.DEEPSEEK_BASE_URL
+        api_key = settings.DEEPSEEK_API_KEY
 
-    # 识别平台：配了 OPENAI_VISION_BASE_URL 走它（如 DeepSeek 视觉），否则走千问；Key 优先视觉专用 → DeepSeek → 千问
-    base_url = settings.OPENAI_VISION_BASE_URL or settings.OPENAI_BASE_URL
-    api_key = settings.OPENAI_VISION_API_KEY or settings.DEEPSEEK_API_KEY or settings.OPENAI_API_KEY
     if not api_key or api_key.startswith("sk-placeholder"):
-        raise CustomException(msg="未配置 AI API Key（请配置 OPENAI_API_KEY 或 DEEPSEEK_API_KEY）")
+        raise CustomException(msg="未配置 AI API Key：图片识别需 ZHIPU_API_KEY，文字解析需 DEEPSEEK_API_KEY")
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": messages, "max_tokens": 1000, "temperature": 0.1},
+                json={"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.1},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -553,6 +581,38 @@ async def ai_recognize_controller(
         return SuccessResponse(data=result, msg="AI 识别成功")
     except json.JSONDecodeError:
         return SuccessResponse(data={"raw_text": content}, msg="AI 返回文本（请核对）")
+
+
+@DoctorRouter.post("/ai/asr", summary="AI 语音识别（智谱 GLM-ASR-2512 音频转写）")
+async def ai_asr_controller(
+    auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_DOCTOR]))],
+    body: Annotated[dict, Body(description='{"audio_base64": "音频 base64 编码", "format": "wav|mp3"}')],
+) -> JSONResponse:
+    audio = (body.get("audio_base64") or "").strip()
+    if not audio:
+        raise CustomException(msg="请提供 audio_base64（音频 base64 编码）")
+    if not settings.ZHIPU_API_KEY or settings.ZHIPU_API_KEY.startswith("sk-placeholder"):
+        raise CustomException(msg="未配置智谱 API Key（请在 env/.env.dev 配置 ZHIPU_API_KEY）")
+    model = settings.ZHIPU_ASR_MODEL or "glm-asr-2512"
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                settings.ZHIPU_BASE_URL.rstrip("/") + "/audio/transcriptions",
+                headers={"Authorization": f"Bearer {settings.ZHIPU_API_KEY}"},
+                files={
+                    "model": (None, model),
+                    "stream": (None, "false"),
+                    "file_base64": (None, audio),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        text = (data.get("text") or "").strip()
+    except Exception as e:
+        raise CustomException(msg=f"语音识别失败：{e}") from e
+    if not text:
+        raise CustomException(msg="语音识别未返回文本")
+    return SuccessResponse(data={"text": text}, msg="语音识别成功")
 
 
 @DoctorRouter.get("/meeting/templates", summary="三会模板列表")

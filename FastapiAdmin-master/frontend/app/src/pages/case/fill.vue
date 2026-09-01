@@ -2,9 +2,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import DoctorAPI, { type TemplateField } from '@/api/module_cpx/doctor'
+import DoctorAPI, { type TemplateField, type EcgConsultItem } from '@/api/module_cpx/doctor'
 import { useUserStore } from '@/store/userStore'
-import { http } from '@/http'
+import { http, getApiBaseUrl } from '@/http'
+import { safeBack } from '@/utils/back'
 
 definePage({
   name: 'case-fill',
@@ -14,10 +15,10 @@ definePage({
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 0
 
 function goBack() {
-  uni.navigateBack()
+  safeBack()
 }
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE_URL = getApiBaseUrl()
 const userStore = useUserStore()
 
 /** 图片字段 URL 补全 */
@@ -71,6 +72,15 @@ const activeTab = ref('')
 const caseInfo = ref<{ case_no?: string; patient_name?: string; status?: string; audit_records?: any[] }>({})
 const formData = reactive<Record<string, unknown>>({})
 
+/** 本病例关联的远程心电记录（用于与数据直报「接收远程心电图」保持一致） */
+const ecgRecords = ref<EcgConsultItem[]>([])
+
+/** 取最新一条含图片的远程心电记录图片（ecg_records 已按时间倒序） */
+function latestRemoteEcgImage(): string | null {
+  const withImg = (ecgRecords.value || []).filter((e) => e.image_path)
+  return withImg.length ? (withImg[0].image_path as string) : null
+}
+
 const FIELD_TYPE_LABEL: Record<string, string> = {
   text: '文本', number: '数字', date: '日期', time: '时间', datetime: '日期时间', select: '选择', image: '图片',
 }
@@ -117,7 +127,7 @@ onLoad(async (query) => {
     Object.keys(detail.form_data || {}).forEach((k) => {
       formData[k] = detail.form_data[k]
     })
-    // 基本信息自动带入（建档已填）
+    // 基本信息自动带入（建档已填的全部字段，按模板 field_code 回填到对应字段）
     const base = {
       patient_name: detail.patient_name,
       gender: detail.gender,
@@ -125,12 +135,26 @@ onLoad(async (query) => {
       phone: detail.phone,
       come_type: detail.come_type,
       diagnose_type: detail.diagnose_type,
+      id_type: detail.id_type,
+      id_number: detail.id_number,
+      birth_date: detail.birth_date,
+      onset_address: detail.onset_address,
+      detail_address: detail.detail_address,
+      insurance_type: detail.insurance_type,
+      insurance_no: detail.insurance_no,
+      first_contact_time: detail.first_contact_time,
     }
     Object.keys(base).forEach((k) => {
       const v = (base as Record<string, unknown>)[k]
       if (v !== undefined && v !== null && v !== '' && (formData[k] === undefined || formData[k] === ''))
         formData[k] = v
     })
+    // 远程心电图 ↔ 数据直报「接收远程心电图」保持一致：合诊患者（已关联远程心电记录）自动导入图片
+    ecgRecords.value = (detail.ecg_records as EcgConsultItem[] | undefined) || []
+    const hasRemoteField = tplFields.value.some((f) => f.field_code === 'remote_ecg_receive')
+    const ecgImg = latestRemoteEcgImage()
+    if (hasRemoteField && ecgImg)
+      formData['remote_ecg_receive'] = ecgImg
     // 默认激活第一个分类
     if (tabs.value.length)
       activeTab.value = tabs.value[0].key
@@ -274,6 +298,10 @@ const canEdit = computed(() => {
 
 async function handleSave() {
   if (!templateId.value) return
+  if (!canEdit.value) {
+    uni.showToast({ title: '当前状态不可编辑，仅草稿/驳回可修改', icon: 'none' })
+    return
+  }
   saving.value = true
   try {
     await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...formData } })
@@ -285,12 +313,18 @@ async function handleSave() {
 
 async function handleSubmit() {
   if (!templateId.value) return
+  if (!canEdit.value) {
+    uni.showToast({ title: '当前状态不可编辑，仅草稿/驳回可修改', icon: 'none' })
+    return
+  }
   submitting.value = true
   try {
     await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...formData } })
     await DoctorAPI.submitCase(caseId.value)
+    // 立即同步状态，避免残留的自动保存定时器带着旧状态（draft）再去存导致 400/500
+    caseInfo.value = { ...caseInfo.value, status: 'submitted' }
     uni.showToast({ title: '提交成功，已进入审核', icon: 'success' })
-    setTimeout(() => uni.navigateBack(), 800)
+    setTimeout(() => safeBack(), 800)
   }
   catch { /* toast by http */ }
   finally { submitting.value = false }
@@ -347,6 +381,22 @@ function idCardEntry() {
       })
     },
   })
+}
+
+/** 导入远程心电图：合诊患者（已关联远程心电记录）自动填入图片；非合诊患者提示但仍可手动填 */
+function importRemoteEcg() {
+  const img = latestRemoteEcgImage()
+  if (img) {
+    formData['remote_ecg_receive'] = img
+    uni.showToast({ title: '已导入远程心电图', icon: 'success' })
+  }
+  else {
+    uni.showModal({
+      title: '该患者不是合诊患者',
+      content: '该患者暂无远程心电记录，无法自动导入。你仍可在下方手动拍照或选择心电图图片填入「接收远程心电图」。',
+      showCancel: false,
+    })
+  }
 }
 
 /** AI 智能识别：图片识别（调用后端通义千问 Vision）/ 语音识别（Web Speech API + 后端解析） */
@@ -441,31 +491,47 @@ function fillFormData(info: Record<string, string>) {
     age: 'age', '年龄': 'age',
     birth_date: 'birth_date', '出生日期': 'birth_date',
     id_number: 'id_number', '身份证号': 'id_number',
-    id_type: 'id_type', '证件类型': 'id_type',
+    id_type: 'id_type', '证件类型': 'id_type', 'card_type': 'card_type',
     phone: 'phone', '联系电话': 'phone', '电话': 'phone',
     come_type: 'come_type', '来院方式': 'come_type',
     onset_address: 'onset_address', '发病地址': 'onset_address',
     detail_address: 'detail_address', '详细地址': 'detail_address',
-    insurance_type: 'insurance_type', '医保类型': 'insurance_type',
+    insurance_type: 'insurance_type', '医保类型': 'insurance_type', 'insurance': 'insurance',
     insurance_no: 'insurance_no', '医保编号': 'insurance_no', '医保号': 'insurance_no',
     chief_complaint: 'chief_complaint', '主诉': 'chief_complaint',
-    diagnose_type: 'diagnose_type', '诊断': 'diagnose_type',
+    diagnose_type: 'diagnose_type', '诊断': 'diagnose_type', '诊断类型': 'diagnose_type',
   }
+  // 模板实际存在的 field_code 集合：模型若直接返回标准编码（如 fmc_time）可精准命中
+  const tplCodes = new Set((tplFields.value || []).map((f: any) => f.field_code))
   let filled = 0
   const details: string[] = []
+  const unmatched: string[] = []
   for (const [k, v] of Object.entries(info)) {
     if (!v) continue
-    const code = fieldAlias[k] || fieldAlias[String(k).trim()]
+    let code = fieldAlias[k] || fieldAlias[String(k).trim()]
+    if (!code && tplCodes.has(k)) code = k
     if (code && formData[code] !== undefined) {
       formData[code] = v
       filled++
       details.push(`${code}=${v}`)
     }
+    else if (!code) {
+      unmatched.push(`${k}=${v}`)
+    }
   }
   if (filled > 0) {
+    let content = `已自动填入 ${filled} 个字段，请核对：\n${details.join('\n')}`
+    if (unmatched.length) {
+      const head = unmatched.slice(0, 5).join('、') + (unmatched.length > 5 ? '…' : '')
+      content += `\n\n另有 ${unmatched.length} 项未匹配到当前模板字段（${head}），请手动补充`
+    }
+    uni.showModal({ title: 'AI 识别完成', content, showCancel: false })
+  }
+  else if (unmatched.length) {
+    const head = unmatched.slice(0, 5).join('、') + (unmatched.length > 5 ? '…' : '')
     uni.showModal({
-      title: 'AI 识别完成',
-      content: `已填入 ${filled} 个字段，请核对：\n${details.join('\n')}`,
+      title: 'AI 识别结果',
+      content: `识别到 ${unmatched.length} 项，但当前模板暂无对应字段可填入（${head}），请手动补充`,
       showCancel: false,
     })
   }
@@ -609,6 +675,7 @@ function fillFormData(info: Record<string, string>) {
           <view v-else-if="f.field_type === 'image'" class="img-field">
             <image v-if="formData[f.field_code]" :src="imgSrc(formData[f.field_code])" class="img-preview" mode="aspectFit" />
             <view class="img-actions">
+              <view v-if="f.field_code === 'remote_ecg_receive'" class="img-btn import" @click="importRemoteEcg">📥 导入远程心电图</view>
               <view class="img-btn" @click="uploadImage(f)">📷 拍照 / 选图</view>
               <view v-if="formData[f.field_code]" class="img-btn danger" @click="formData[f.field_code] = ''">删除</view>
             </view>
@@ -868,6 +935,7 @@ function fillFormData(info: Record<string, string>) {
   font-size: 26rpx;
 }
 .img-btn.danger { background: #fef2f2; color: #dc2626; flex: 0 0 160rpx; }
+.img-btn.import { background: #ecfdf5; color: #059669; flex: 0 0 220rpx; }
 
 .empty { padding: 20rpx 4rpx; font-size: 24rpx; color: #c0c4cc; text-align: center; }
 

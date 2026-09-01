@@ -9,6 +9,8 @@ import UserAPI, {
   type DoctorForm,
   type DoctorTable,
 } from "@/api/cpx/user";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxHospital" });
 
@@ -467,24 +469,26 @@ onMounted(fetchHospitals);
     <!-- ═══════════ 视图① 医院卡片总览 ═══════════ -->
     <template v-if="viewMode === 'overview'">
       <ElCard shadow="never" class="mb-4">
-        <div class="flex flex-wrap items-center gap-3">
-          <ElInput
-            v-model="hospitalQuery.hospital_name"
-            placeholder="医院名称"
-            clearable
-            class="w-48"
-            @keyup.enter="handleHospitalSearch"
-          />
-          <ElSelect v-model="hospitalQuery.hospital_level" placeholder="医院等级" clearable class="w-32">
-            <ElOption v-for="lv in LEVEL_OPTIONS" :key="lv" :label="lv" :value="lv" />
-          </ElSelect>
-          <ElSelect v-model="hospitalQuery.province" placeholder="地区" clearable class="w-32">
-            <ElOption v-for="p in provinceOptions" :key="p" :label="p" :value="p" />
-          </ElSelect>
-          <ElSelect v-model="hospitalQuery.status" placeholder="状态" clearable class="w-28">
-            <ElOption label="正常" :value="1" />
-            <ElOption label="禁用" :value="0" />
-          </ElSelect>
+        <div class="flex flex-wrap items-end gap-x-4 gap-y-3">
+          <FaSearchItem label="医院名称">
+            <FaSearchInput v-model="hospitalQuery.hospital_name" placeholder="医院名称" clearable class="w-48" @keyup.enter="handleHospitalSearch" />
+          </FaSearchItem>
+          <FaSearchItem label="医院等级">
+            <ElSelect v-model="hospitalQuery.hospital_level" placeholder="医院等级" clearable class="w-32">
+              <ElOption v-for="lv in LEVEL_OPTIONS" :key="lv" :label="lv" :value="lv" />
+            </ElSelect>
+          </FaSearchItem>
+          <FaSearchItem label="地区">
+            <ElSelect v-model="hospitalQuery.province" placeholder="地区" clearable filterable class="w-32">
+              <ElOption v-for="p in provinceOptions" :key="p" :label="p" :value="p" />
+            </ElSelect>
+          </FaSearchItem>
+          <FaSearchItem label="状态">
+            <ElSelect v-model="hospitalQuery.status" placeholder="状态" clearable class="w-28">
+              <ElOption label="正常" :value="1" />
+              <ElOption label="禁用" :value="0" />
+            </ElSelect>
+          </FaSearchItem>
           <ElButton type="primary" @click="handleHospitalSearch">查询</ElButton>
           <ElButton @click="handleHospitalReset">重置</ElButton>
           <div class="flex-1" />
@@ -593,14 +597,22 @@ onMounted(fetchHospitals);
         <ElTabs v-model="personDialog.kind" type="border-card" class="!shadow-none">
           <!-- ── 审核员 Tab ── -->
           <ElTabPane label="审核员" name="auditor">
-            <div class="mb-4 flex flex-wrap items-center gap-3">
-              <ElInput v-model="auditorQuery.real_name" placeholder="姓名" clearable class="w-36" @keyup.enter="handleAuditorSearch" />
-              <ElInput v-model="auditorQuery.phone" placeholder="手机号" clearable class="w-40" @keyup.enter="handleAuditorSearch" />
-              <ElInput v-model="auditorQuery.username" placeholder="登录账号" clearable class="w-40" @keyup.enter="handleAuditorSearch" />
-              <ElSelect v-model="auditorQuery.status" placeholder="账号状态" clearable class="w-28">
-                <ElOption label="正常" :value="1" />
-                <ElOption label="禁用" :value="0" />
-              </ElSelect>
+            <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+              <FaSearchItem label="姓名">
+                <FaSearchInput v-model="auditorQuery.real_name" placeholder="姓名" clearable class="w-36" @keyup.enter="handleAuditorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="手机号">
+                <FaSearchInput v-model="auditorQuery.phone" placeholder="手机号" clearable class="w-40" @keyup.enter="handleAuditorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="登录账号">
+                <FaSearchInput v-model="auditorQuery.username" placeholder="登录账号" clearable class="w-40" @keyup.enter="handleAuditorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="账号状态">
+                <ElSelect v-model="auditorQuery.status" placeholder="账号状态" clearable class="w-28">
+                  <ElOption label="正常" :value="1" />
+                  <ElOption label="禁用" :value="0" />
+                </ElSelect>
+              </FaSearchItem>
               <ElButton type="primary" @click="handleAuditorSearch">查询</ElButton>
               <ElButton @click="resetAuditorQuery; fetchAuditors()">重置</ElButton>
               <div class="flex-1" />
@@ -652,16 +664,28 @@ onMounted(fetchHospitals);
 
           <!-- ── 医生 Tab ── -->
           <ElTabPane label="医生" name="doctor">
-            <div class="mb-4 flex flex-wrap items-center gap-3">
-              <ElInput v-model="doctorQuery.real_name" placeholder="姓名" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
-              <ElInput v-model="doctorQuery.doctor_no" placeholder="工号" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
-              <ElInput v-model="doctorQuery.phone" placeholder="手机号" clearable class="w-36" @keyup.enter="handleDoctorSearch" />
-              <ElInput v-model="doctorQuery.department" placeholder="科室" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
-              <ElInput v-model="doctorQuery.title" placeholder="职称" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
-              <ElSelect v-model="doctorQuery.status" placeholder="账号状态" clearable class="w-28">
-                <ElOption label="正常" :value="1" />
-                <ElOption label="禁用" :value="0" />
-              </ElSelect>
+            <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+              <FaSearchItem label="姓名">
+                <FaSearchInput v-model="doctorQuery.real_name" placeholder="姓名" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="工号">
+                <FaSearchInput v-model="doctorQuery.doctor_no" placeholder="工号" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="手机号">
+                <FaSearchInput v-model="doctorQuery.phone" placeholder="手机号" clearable class="w-36" @keyup.enter="handleDoctorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="科室">
+                <FaSearchInput v-model="doctorQuery.department" placeholder="科室" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="职称">
+                <FaSearchInput v-model="doctorQuery.title" placeholder="职称" clearable class="w-32" @keyup.enter="handleDoctorSearch" />
+              </FaSearchItem>
+              <FaSearchItem label="账号状态">
+                <ElSelect v-model="doctorQuery.status" placeholder="账号状态" clearable class="w-28">
+                  <ElOption label="正常" :value="1" />
+                  <ElOption label="禁用" :value="0" />
+                </ElSelect>
+              </FaSearchItem>
               <ElButton type="primary" @click="handleDoctorSearch">查询</ElButton>
               <ElButton @click="resetDoctorQuery; fetchDoctors()">重置</ElButton>
               <div class="flex-1" />

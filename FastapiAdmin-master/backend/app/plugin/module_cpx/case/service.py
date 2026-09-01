@@ -2,16 +2,21 @@
 """病例管理服务"""
 
 import random
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import CustomException
+from app.config.setting import settings
 
 from app.plugin.module_cpx.auth.dependencies import BizAuth
 from app.plugin.module_cpx.case.schema import CaseCreateSchema
-from app.plugin.module_cpx.fields import FIELDS
+from app.plugin.module_cpx.fields import (
+    FIELDS,
+    QUALITY_METRICS,
+    TIMELINE_NODES,
+)
 from app.plugin.module_cpx.models import (
     AuditRecordModel,
     CaseDetailModel,
@@ -20,6 +25,39 @@ from app.plugin.module_cpx.models import (
     FollowUpModel,
     MeetingRecordModel,
 )
+
+
+def _cpx_abs_static_url(path: str | None) -> str | None:
+    """心电图/图片相对路径转可访问绝对 URL（与 doctor.service._abs_static_url 同逻辑）。"""
+    if not path:
+        return None
+    p = path.lstrip("/")
+    if p.startswith("api/v1/") or p.startswith("http://") or p.startswith("https://"):
+        return "/" + p
+    return f"{settings.ROOT_PATH}{settings.STATIC_URL}/{p}"
+
+
+def _cpx_parse_time(value) -> datetime | None:
+    """解析时间字段（兼容多种格式），失败返回 None。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    text = str(value).strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _cpx_diff_minutes(t1: datetime | None, t2: datetime | None) -> int | None:
+    if t1 and t2:
+        return int((t2 - t1).total_seconds() // 60)
+    return None
 
 
 class CaseService:
@@ -34,20 +72,19 @@ class CaseService:
         """生成病例编号：C + 年月日时分秒 + 4 位随机数（保证唯一）。"""
         return f"C{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(1000, 9999)}"
 
-    async def page(
+    async def _build_conditions(
         self,
         *,
-        page_no: int,
-        page_size: int,
         hospital_id: int | None,
         doctor_id: int | None,
-        case_no: str | None = None,
-        patient_name: str | None = None,
-        doctor_name: str | None = None,
+        case_no: str | None,
+        patient_name: str | None,
+        doctor_name: str | None,
         status: str | None,
         start_time: str | None,
         end_time: str | None,
-    ) -> dict:
+    ) -> list:
+        """构建病例筛选条件（列表分页与导出共用，保持口径一致）"""
         conditions = []
         if hospital_id:
             conditions.append(CaseRecordModel.hospital_id == hospital_id)
@@ -81,6 +118,92 @@ class CaseService:
             conditions.append(CaseRecordModel.create_time >= start_time)
         if end_time:
             conditions.append(CaseRecordModel.create_time <= f"{end_time} 23:59:59")
+        return conditions
+
+    async def export_data(
+        self,
+        *,
+        hospital_id: int | None,
+        doctor_id: int | None,
+        case_no: str | None,
+        patient_name: str | None,
+        doctor_name: str | None,
+        status: str | None,
+        start_time: str | None,
+        end_time: str | None,
+    ) -> list[dict]:
+        """导出病例数据（全量，不分页；含病例基础信息 + 填报 form_data）"""
+        conditions = await self._build_conditions(
+            hospital_id=hospital_id,
+            doctor_id=doctor_id,
+            case_no=case_no,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        rows = (
+            await self.db.execute(
+                select(CaseRecordModel)
+                .where(*conditions)
+                .order_by(CaseRecordModel.create_time.desc(), CaseRecordModel.id.desc())
+            )
+        ).scalars().all()
+        if not rows:
+            return []
+
+        form_map: dict[int, dict] = {}
+        details = (
+            await self.db.execute(
+                select(CaseDetailModel).where(CaseDetailModel.case_id.in_([c.id for c in rows]))
+            )
+        ).scalars().all()
+        for d in details:
+            form_map[d.case_id] = d.form_data or {}
+
+        return [
+            {
+                "case_no": c.case_no,
+                "patient_name": c.patient_name,
+                "gender": c.gender,
+                "age": c.age,
+                "phone": c.phone,
+                "come_type": c.come_type,
+                "diagnose_type": c.diagnose_type,
+                "hospital_name": c.hospital.hospital_name if c.hospital else None,
+                "doctor_name": c.doctor.real_name if c.doctor else None,
+                "status": c.status,
+                "create_time": c.create_time.strftime("%Y-%m-%d %H:%M:%S") if c.create_time else None,
+                "form_data": form_map.get(c.id, {}),
+            }
+            for c in rows
+        ]
+
+    async def page(
+        self,
+        *,
+        page_no: int,
+        page_size: int,
+        hospital_id: int | None,
+        doctor_id: int | None,
+        case_no: str | None = None,
+        patient_name: str | None = None,
+        doctor_name: str | None = None,
+        status: str | None,
+        start_time: str | None,
+        end_time: str | None,
+    ) -> dict:
+        conditions = await self._build_conditions(
+            hospital_id=hospital_id,
+            doctor_id=doctor_id,
+            case_no=case_no,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
         total = await self.db.execute(
             select(func.count()).select_from(CaseRecordModel).where(*conditions)
@@ -164,6 +287,31 @@ class CaseService:
                 for f in fields
             ]
 
+        # 关联心电图诊断记录（图片 / AI 诊断 / 协同总结），供 Web 详情页展示
+        ecg_records: list[dict] = []
+        try:
+            ecg_rows = (
+                await self.db.execute(
+                    select(EcgConsultModel)
+                    .where(EcgConsultModel.case_id == id)
+                    .order_by(EcgConsultModel.create_time.desc())
+                )
+            ).scalars().all()
+            for r in ecg_rows:
+                ecg_records.append(
+                    {
+                        "id": r.id,
+                        "image_path": _cpx_abs_static_url(r.image_path),
+                        "ai_diagnosis": r.ai_diagnosis,
+                        "ai_summary": r.ai_summary,
+                        "feedback": r.feedback,
+                        "status": r.status,
+                        "create_time": r.create_time.isoformat() if r.create_time else None,
+                    }
+                )
+        except Exception:
+            ecg_records = []
+
         return {
             "id": case.id,
             "case_no": case.case_no,
@@ -196,6 +344,103 @@ class CaseService:
                 }
                 for a in audits
             ],
+            "ecg_records": ecg_records,
+        }
+
+    async def timeline(self, *, id: int) -> dict:
+        """救治时间轴：时间节点时间线 + 关键质控指标（管理员可查看任意病例）。"""
+        case = await self.db.get(CaseRecordModel, id)
+        if not case:
+            raise CustomException(msg="病例不存在")
+        detail = (
+            await self.db.execute(select(CaseDetailModel).where(CaseDetailModel.case_id == id))
+        ).scalars().first()
+        form_data = detail.form_data or {} if detail else {}
+
+        nodes = []
+        for code, name in TIMELINE_NODES:
+            raw = form_data.get(code)
+            dt = _cpx_parse_time(raw)
+            nodes.append({
+                "code": code,
+                "name": name,
+                "value": raw,
+                "time": dt.strftime("%Y-%m-%d %H:%M") if dt else None,
+            })
+
+        metrics = []
+        for m in QUALITY_METRICS:
+            start = _cpx_parse_time(form_data.get(m["start"]))
+            end = _cpx_parse_time(form_data.get(m["end"]))
+            diff = _cpx_diff_minutes(start, end)
+            status = "n/a"
+            if diff is not None:
+                status = "pass" if (m["limit"] is None or diff <= m["limit"]) else "fail"
+            metrics.append({
+                "key": m["key"],
+                "name": m["name"],
+                "desc": m["desc"],
+                "start": m["start"],
+                "end": m["end"],
+                "limit": m["limit"],
+                "minutes": diff,
+                "status": status,
+            })
+
+        return {
+            "case_no": case.case_no,
+            "patient_name": case.patient_name,
+            "diagnose_type": case.diagnose_type,
+            "nodes": nodes,
+            "metrics": metrics,
+        }
+
+    async def analysis(self, *, id: int) -> dict:
+        """单病例分析：对照质控指标逐项校验（达标/不达标/不适用）+ 必填缺失清单。"""
+        case = await self.db.get(CaseRecordModel, id)
+        if not case:
+            raise CustomException(msg="病例不存在")
+        detail = (
+            await self.db.execute(select(CaseDetailModel).where(CaseDetailModel.case_id == id))
+        ).scalars().first()
+        form_data = detail.form_data or {} if detail else {}
+
+        items = []
+        for m in QUALITY_METRICS:
+            start = _cpx_parse_time(form_data.get(m["start"]))
+            end = _cpx_parse_time(form_data.get(m["end"]))
+            diff = _cpx_diff_minutes(start, end)
+            status = "n/a"
+            if start is None or end is None:
+                status = "n/a"
+            elif m["limit"] is not None and diff is not None and diff <= m["limit"]:
+                status = "pass"
+            elif m["limit"] is None:
+                status = "info"
+            else:
+                status = "fail"
+            items.append({
+                "key": m["key"],
+                "name": m["name"],
+                "desc": m["desc"],
+                "limit": m["limit"],
+                "minutes": diff,
+                "status": status,
+            })
+
+        missing = []
+        for f in FIELDS:
+            if f.get("required") == 1:
+                v = form_data.get(f["code"])
+                if v in (None, ""):
+                    missing.append({"field_code": f["code"], "field_name": f["name"], "tab": f.get("tab")})
+
+        return {
+            "case_no": case.case_no,
+            "patient_name": case.patient_name,
+            "diagnose_type": case.diagnose_type,
+            "items": items,
+            "missing_required": missing,
         }
 
     async def create(self, data: CaseCreateSchema) -> dict:

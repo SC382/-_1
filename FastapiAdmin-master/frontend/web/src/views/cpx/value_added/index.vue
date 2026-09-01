@@ -3,6 +3,8 @@
 import { onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
 import ValueAddedAPI, { type ValueAddedForm, type ValueAddedItem, type ValueAddedLinkType, type ValueAddedStatus } from "@/api/cpx/value_added";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxValueAdded" });
 
@@ -177,11 +179,15 @@ onMounted(fetchData);
 <template>
   <div class="cpx-page p-4">
     <ElCard shadow="never" class="mb-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <ElInput v-model="query.keyword" placeholder="服务名称" clearable class="w-56" @keyup.enter="handleSearch" />
-        <ElSelect v-model="query.status" placeholder="状态" clearable class="w-32">
-          <ElOption v-for="o in STATUS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-        </ElSelect>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <FaSearchItem label="服务名称">
+          <FaSearchInput v-model="query.keyword" placeholder="服务名称" clearable class="w-56" @keyup.enter="handleSearch" />
+        </FaSearchItem>
+        <FaSearchItem label="状态">
+          <ElSelect v-model="query.status" placeholder="状态" clearable class="w-32">
+            <ElOption v-for="o in STATUS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          </ElSelect>
+        </FaSearchItem>
         <ElButton type="primary" @click="handleSearch">查询</ElButton>
         <ElButton @click="handleReset">重置</ElButton>
         <div class="flex-1" />

@@ -4,9 +4,10 @@ import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import DoctorAPI, { type DoctorTemplate } from '@/api/module_cpx/doctor'
 import { useUserStore } from '@/store/userStore'
-import { http } from '@/http'
+import { http, getApiBaseUrl } from '@/http'
+import { safeBack } from '@/utils/back'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE_URL = getApiBaseUrl()
 const userStore = useUserStore()
 
 definePage({
@@ -41,7 +42,7 @@ const comeTypeOptions = [
   { label: '自行来院', value: '自行' },
   { label: '外院转诊', value: '转诊' },
 ]
-const idTypeOptions = ['身份证', '社保卡', '其他']
+const idTypeOptions = ['身份证', '医保卡', '其他']
 const insuranceOptions = ['城镇职工医保', '城乡居民医保', '新农合', '自费', '其他']
 const diagnoseTypes = ['STEMI', 'NSTEMI', 'UA', '主动脉夹层', '肺栓塞', '低危胸痛']
 
@@ -66,7 +67,7 @@ onLoad(async () => {
 })
 
 function goBack() {
-  uni.navigateBack()
+  safeBack()
 }
 
 // ── AI 智能录入（AI 自主判断字段 → 动态映射回填表单，识别结果可修改）──
@@ -77,7 +78,7 @@ const FIELD_MAP: Record<string, string> = {
   age: 'age', '年龄': 'age',
   birth_date: 'birth_date', '出生日期': 'birth_date',
   id_number: 'id_number', '身份证号': 'id_number',
-  id_type: 'id_type', '证件类型': 'id_type',
+  id_type: 'id_type', '证件类型': 'id_type', 'card_type': 'id_type',
   phone: 'phone', '联系电话': 'phone', '电话': 'phone',
   come_type: 'come_type', '来院方式': 'come_type',
   onset_address: 'onset_address', '发病地址': 'onset_address',
@@ -87,16 +88,55 @@ const FIELD_MAP: Record<string, string> = {
   diagnose_type: 'diagnose_type', '诊断': 'diagnose_type', '诊断类型': 'diagnose_type',
 }
 
+/** 日期归一化：把「1968年3月12日」「1968/3/12」「1968.3.12」统一成 YYYY-MM-DD */
+function normalizeDate(v: string): string {
+  const s = String(v || '').trim()
+  const m = s.match(/(\d{4})\s*[-年/.]\s*(\d{1,2})\s*[-月/.]\s*(\d{1,2})/)
+  if (!m) return s
+  const p = (x: string) => x.padStart(2, '0')
+  return `${m[1]}-${p(m[2])}-${p(m[3])}`
+}
+/** 根据出生日期计算周岁（自动兼容 1968年3月12日 / 1968/3/12 等写法） */
+function calcAge(birth: string): number | '' {
+  const b = normalizeDate(birth)
+  if (!b || !/^\d{4}-\d{2}-\d{2}$/.test(b)) return ''
+  const [y, m, d] = b.split('-').map(Number)
+  const t = new Date()
+  let age = t.getFullYear() - y
+  const md = t.getMonth() + 1 - m
+  if (md < 0 || (md === 0 && t.getDate() < d)) age--
+  if (age < 0 || age > 200) return ''
+  return age
+}
+/** 出生日期 → 自动算年龄填入（年龄由出生日期派生，无需单独识别/手填） */
+function syncAgeFromBirth() {
+  const a = calcAge(form.value.birth_date)
+  if (a !== '') form.value.age = String(a)
+}
+/** 证件类型归一化：模型可能返回「居民身份证」「社会保障卡」等别名 */
+function normalizeIdType(v: string): string {
+  const s = String(v).trim()
+  if (!s) return s
+  if (/身份证|居民身份证|二代身份证|居民身分证/.test(s)) return '身份证'
+  if (/医保|医疗保险|医疗保险卡|社保卡|社会保障卡/.test(s)) return '医保卡'
+  return s
+}
+
 function fillFromRecognized(data: Record<string, string>) {
   let filled = 0
   for (const [k, v] of Object.entries(data)) {
     if (!v) continue
-    const key = FIELD_MAP[k] || FIELD_MAP[String(k).trim()]
+    let key = FIELD_MAP[k] || FIELD_MAP[String(k).trim()]
+    if (!key && (k in form.value)) key = k
     if (key && form.value[key] !== undefined) {
-      form.value[key] = v
+      form.value[key] = key === 'id_type'
+        ? normalizeIdType(v)
+        : (key === 'birth_date' ? normalizeDate(v) : v)
       filled++
     }
   }
+  // 识别到出生日期后自动算年龄
+  syncAgeFromBirth()
   if (filled > 0) {
     uni.showToast({ title: `已自动填入 ${filled} 项，请核对`, icon: 'success' })
   }
@@ -244,6 +284,8 @@ function idCardEntry() {
 }
 
 function chooseIdCardSource(cardType: string) {
+  // 先把用户选定的证件类型显示出来（"显示被是什么证件"），再由 OCR 填充其余信息
+  form.value.id_type = cardType
   uni.showActionSheet({
     itemList: ['照片拍摄', '本地上传'],
     success: (res) => {
@@ -354,6 +396,10 @@ function fctDate() { return form.value.first_contact_time.slice(0, 10) }
 function fctTime() { return form.value.first_contact_time.slice(11, 16) }
 function onFctDate(e: any) { form.value.first_contact_time = `${e.detail.value} ${fctTime() || '00:00'}` }
 function onFctTime(e: any) { form.value.first_contact_time = `${fctDate() || todayStr()} ${e.detail.value}` }
+function onBirthDateChange(e: any) {
+  form.value.birth_date = e.detail.value
+  syncAgeFromBirth()
+}
 
 // ── 提交 ──
 async function handleCreate() {
@@ -472,7 +518,7 @@ async function handleCreate() {
 
         <view class="field">
           <text class="field-label">出生日期</text>
-          <picker mode="date" :value="form.birth_date" @change="form.birth_date = $event.detail.value">
+          <picker mode="date" :value="form.birth_date" @change="onBirthDateChange">
             <view class="field-input picker-value" :class="{ empty: !form.birth_date }">{{ form.birth_date || '请填写出生日期' }}</view>
           </picker>
         </view>

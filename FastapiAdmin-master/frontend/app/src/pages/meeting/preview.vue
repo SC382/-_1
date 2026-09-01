@@ -1,5 +1,6 @@
 <!-- 三会 PPT 预览：封面/本院指标/时间指标/问题病历/改进意见 + 下载 -->
 <script setup lang="ts">
+import { getApiBaseUrl } from '@/http'
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import DoctorAPI, { type MeetingStat } from '@/api/module_cpx/doctor'
@@ -9,7 +10,7 @@ definePage({
   style: { navigationBarTitleText: '会议预览' },
 })
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const BASE_URL = getApiBaseUrl()
 const loading = ref(false)
 const record = ref<{ id: number; title: string; meeting_type: string; start_date?: string; end_date?: string; file_url?: string; create_time?: string; stat: MeetingStat } | null>(null)
 

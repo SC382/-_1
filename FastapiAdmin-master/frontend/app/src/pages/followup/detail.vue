@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import DoctorAPI, { type FollowUpItem } from '@/api/module_cpx/doctor'
+import { safeBack } from '@/utils/back'
 
 definePage({
   name: 'followup-detail',
@@ -67,7 +68,7 @@ async function handleSubmit() {
   try {
     await DoctorAPI.followupSubmit(followId.value, { ...form.value })
     uni.showToast({ title: '随访已提交', icon: 'success' })
-    setTimeout(() => uni.navigateBack(), 700)
+    setTimeout(() => safeBack(), 700)
   }
   catch { /* toast */ }
   finally { submitting.value = false }

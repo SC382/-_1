@@ -1,5 +1,7 @@
 <!-- 病例详情：基础信息 + 动态字段 + 审核反馈（只读） -->
 <script setup lang="ts">
+import { getApiBaseUrl } from '@/http'
+import { safeBack } from '@/utils/back'
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import DoctorAPI, { type CaseDetailData, type FieldDef } from '@/api/module_cpx/doctor'
@@ -12,7 +14,7 @@ definePage({
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 0
 
 function goBack() {
-  uni.navigateBack()
+  safeBack()
 }
 
 const loading = ref(false)
@@ -59,7 +61,7 @@ function imgSrc(url: string) {
   if (!s) return ''
   if (s.startsWith('http'))
     return s
-  return `${import.meta.env.VITE_API_BASE_URL || ''}${s}`
+  return `${getApiBaseUrl()}${s}`
 }
 
 function previewImg(url: string) {

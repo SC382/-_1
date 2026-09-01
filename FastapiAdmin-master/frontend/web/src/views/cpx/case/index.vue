@@ -2,9 +2,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { saveAs } from "file-saver";
 import HospitalAPI, { type HospitalTable } from "@/api/cpx/hospital";
-import CaseAPI, { type CaseDetail, type CaseTable } from "@/api/cpx/case";
+import CaseAPI, { type CaseDetail, type CaseTable, type CaseTimeline, type CaseAnalysis } from "@/api/cpx/case";
 import UserAPI, { type DoctorTable } from "@/api/cpx/user";
+import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
+import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
 
 defineOptions({ name: "CpxCase" });
 
@@ -142,6 +145,62 @@ function handleCaseSearch() {
   fetchCases();
 }
 
+// ── 导出 Excel（按当前筛选条件）───────────────────────
+const exporting = ref(false);
+async function handleExport() {
+  exporting.value = true;
+  try {
+    const res = await CaseAPI.exportExcel({
+      hospital_id: currentHospital.value?.id,
+      case_no: caseQuery.case_no || undefined,
+      doctor_name: caseQuery.doctor_name || undefined,
+      patient_name: caseQuery.patient_name || undefined,
+      doctor_id: caseQuery.doctor_id,
+      status: caseQuery.status || undefined,
+      start_time: caseQuery.dateRange?.[0],
+      end_time: caseQuery.dateRange?.[1],
+    });
+    const blob = res.data as unknown as Blob;
+    const t = new Date();
+    const pad = (x: number) => String(x).padStart(2, "0");
+    const name = `病例导出_${currentHospital.value?.hospital_name || "全部"}_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}.xlsx`;
+    saveAs(blob, name);
+    ElMessage.success("导出成功，请查看下载文件");
+  } catch {
+    /* 错误已由拦截器提示 */
+  } finally {
+    exporting.value = false;
+  }
+}
+
+// ── 导出 PDF（按当前筛选条件）───────────────────────
+const exportingPdf = ref(false);
+async function handleExportPdf() {
+  exportingPdf.value = true;
+  try {
+    const res = await CaseAPI.exportPdf({
+      hospital_id: currentHospital.value?.id,
+      case_no: caseQuery.case_no || undefined,
+      doctor_name: caseQuery.doctor_name || undefined,
+      patient_name: caseQuery.patient_name || undefined,
+      doctor_id: caseQuery.doctor_id,
+      status: caseQuery.status || undefined,
+      start_time: caseQuery.dateRange?.[0],
+      end_time: caseQuery.dateRange?.[1],
+    });
+    const blob = res.data as unknown as Blob;
+    const t = new Date();
+    const pad = (x: number) => String(x).padStart(2, "0");
+    const name = `病例导出_${currentHospital.value?.hospital_name || "全部"}_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}.pdf`;
+    saveAs(blob, name);
+    ElMessage.success("导出成功，请查看下载文件");
+  } catch {
+    /* 错误已由拦截器提示 */
+  } finally {
+    exportingPdf.value = false;
+  }
+}
+
 // ── 所属医生下拉（当前医院医生）───────────────────────
 const doctorOptions = ref<DoctorTable[]>([]);
 async function fetchDoctors() {
@@ -154,6 +213,8 @@ async function fetchDoctors() {
 const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detail = ref<CaseDetail | null>(null);
+const timelineData = ref<CaseTimeline | null>(null);
+const analysisData = ref<CaseAnalysis | null>(null);
 
 async function openDetail(row: CaseTable) {
   detailVisible.value = true;
@@ -161,8 +222,35 @@ async function openDetail(row: CaseTable) {
   try {
     const res = await CaseAPI.detail(row.id);
     detail.value = res.data.data;
+    // 并行拉取时间轴与单病例分析（详情页只读展示，非时间采集）
+    const [tl, an] = await Promise.all([
+      CaseAPI.timeline(row.id).then((r) => r.data.data).catch(() => null),
+      CaseAPI.analysis(row.id).then((r) => r.data.data).catch(() => null),
+    ]);
+    timelineData.value = tl;
+    analysisData.value = an;
   } finally {
     detailLoading.value = false;
+  }
+}
+
+// ── 单病例 PDF 导出（打印）─────────────────────────
+const exportingDetailPdf = ref(false);
+async function handleExportPdfDetail() {
+  if (!detail.value?.id) return;
+  exportingDetailPdf.value = true;
+  try {
+    const res = await CaseAPI.exportPdfById(detail.value.id);
+    const blob = res.data as unknown as Blob;
+    const t = new Date();
+    const pad = (x: number) => String(x).padStart(2, "0");
+    const name = `病例报告_${detail.value.case_no || detail.value.id}_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}.pdf`;
+    saveAs(blob, name);
+    ElMessage.success("已生成 PDF，请查看下载文件");
+  } catch {
+    /* 错误已由拦截器提示 */
+  } finally {
+    exportingDetailPdf.value = false;
   }
 }
 
@@ -230,37 +318,106 @@ function fieldValue(f: { field_code: string; field_type: string; field_options?:
   return v;
 }
 
-/** 按字段字典渲染 form_data 的非空字段（三端统一展示；无 field_dict 时回退模板字段） */
+/** 字典外的患者基本信息字段：显示时回退为中文名（避免英文字段编码裸露） */
+const EXTRA_FIELD_CN: Record<string, string> = {
+  detail_address: "详细住址",
+  first_contact_time: "首次接触时间",
+  id_type: "证件类型",
+  insurance_no: "医保卡号",
+  insurance_type: "医保类型",
+};
+
+/** 以下 code 不进入"全部填报数据"模块展示：
+ *  - inpatient_no / discharge_date：已在"完整患者信息"模块展示，避免重复；
+ *  - remote_ecg_receive（接收远程心电图）：属远程心电协同，已在"心电图 AI 诊断"模块统一展示，模块五不重复。
+ */
+const SKIP_FILLED_FIELDS = new Set<string>(["inpatient_no", "discharge_date", "remote_ecg_receive"]);
+
+/** 去掉名称中纯英文的括号注释（如 "首次医疗接触时间(FMC)" -> "首次医疗接触时间"、"院前血压(mmHg)" -> "院前血压"），只保留中文 */
+function cleanFieldName(n: string): string {
+  return n.replace(/\s*\([A-Za-z0-9\s./+-]+\)\s*$/g, "").trim();
+}
+
+/** 图片字段路径标准化：兼容 /api/v1/static/...、/uploads/...、uploads/... 三种写法，统一成可访问的绝对路径 */
+function imageSrc(p: string): string {
+  if (!p) return "";
+  if (p.startsWith("http://") || p.startsWith("https://")) return p;
+  if (p.startsWith("/api/v1/static")) return p;
+  if (p.startsWith("/")) return `/api/v1/static${p}`;
+  return `/api/v1/static/${p}`;
+}
+
+/** 按字段字典渲染 form_data 的全部字段（三端统一展示；字典 + form_data 取并集，空字段也展示，避免漏 key）
+ *  去重/清洗策略：
+ *  ① 字典字段已在 step1 用中文名渲染，step2 跳过这些 code，避免用英文字段编码重复出现（如 "年龄" 与 "age" 并存）；
+ *  ② 按中文名合并，同名只留一条（优先保留有值项）—— 解决 证件类型：字典 card_type(空) 与 表单 id_type(有值) 同名；
+ *  ③ 字段名中的英文括号注释剥离，只留中文。
+ */
 const filledFields = computed(() => {
   const fd = detail.value?.form_data || {};
   const dict = detail.value?.field_dict?.length ? detail.value.field_dict : detail.value?.template_fields;
-  const rows: Array<{ name: string; value: string; long: boolean }> = [];
-  const seen = new Set<string>();
-  (dict || []).forEach((f) => {
-    if (seen.has(f.field_code)) return;
-    seen.add(f.field_code);
-    // 住院号/出院日期已在"完整患者信息"模块展示，避免重复
-    if (f.field_code === "inpatient_no" || f.field_code === "discharge_date") return;
-    const raw = fd[f.field_code];
-    if (raw === undefined || raw === null || raw === "") return;
-    const v = String(raw);
+  const dictCodes = new Set<string>((dict || []).map((f: Record<string, any>) => f.code ?? f.field_code));
+  const rows: Array<{ name: string; value: string; long: boolean; isImage: boolean }> = [];
+  const seenName = new Map<string, number>(); // 中文名 -> rows 下标，用于同名合并
+  const push = (code: string, rawName: string, type?: string, options?: unknown) => {
+    if (SKIP_FILLED_FIELDS.has(code)) return; // 住院号/出院日期（模块二已展示）+ 接收远程心电图（心电图模块已展示），避免重复
+    const raw = fd[code];
+    const v = raw === undefined || raw === null ? "" : String(raw);
     let val = v;
-    if (f.field_type === "select" && Array.isArray(f.field_options)) {
-      const opt = (f.field_options as Array<{ label?: string; value?: string } | string>).find((o) => {
+    if (type === "select" && Array.isArray(options)) {
+      const opt = (options as Array<{ label?: string; value?: string } | string>).find((o) => {
         if (typeof o === "string") return o === v;
         return o.value === v;
       });
       if (opt && typeof opt === "object" && opt.label) val = opt.label;
     }
-    rows.push({ name: f.field_name, value: val, long: v.length > 40 });
+    const name = cleanFieldName(rawName);
+    const isImage = type === "image";
+    const display = val || "-";
+    // 同名合并：已存在同名项时，优先保留有值那条（如 证件类型：card_type 空 / id_type 有值）
+    if (seenName.has(name)) {
+      const idx = seenName.get(name)!;
+      if (rows[idx].value === "-" && display !== "-") rows[idx].value = display;
+      return;
+    }
+    seenName.set(name, rows.length);
+    rows.push({ name, value: display, long: v.length > 40, isImage });
+  };
+  // 1) 先按字段字典渲染（带中文名 / 类型 / 选项）
+  // 注意：后端 field_dict 用 code/name/type/options，template_fields 用 field_code/field_name/field_type/field_options，两套键都兼容
+  (dict || []).forEach((f: Record<string, any>) =>
+    push(f.code ?? f.field_code, f.name ?? f.field_name, f.type ?? f.field_type, f.options ?? f.field_options),
+  );
+  // 2) 仅补 form_data 中"不在字典里"的 key（英文字段编码已在 step1 用中文名渲染过，跳过避免重复；其余回退中文名）
+  Object.keys(fd).forEach((k) => {
+    if (dictCodes.has(k)) return;
+    push(k, EXTRA_FIELD_CN[k] ?? k);
   });
   return rows;
 });
+
+/** 文本字段（走 ElDescriptions 两列网格） */
+const textFields = computed(() => filledFields.value.filter((f) => !f.isImage));
+/** 图片字段（每个独立全宽卡片，真正"占一行"） */
+const imageFields = computed(() => filledFields.value.filter((f) => f.isImage));
 
 const isLongText = (f: { field_code: string }) => {
   const v = detail.value?.form_data?.[f.field_code];
   return typeof v === "string" && v.length > 40;
 };
+
+/** 点击图片放大查看（新标签页打开原图） */
+function openImage(src: string) {
+  if (src) window.open(src, "_blank");
+}
+
+// ── 时间轴 / 病例分析 状态配色（与 APP 端保持一致）────────
+const metricColor = (s: string) => (s === "pass" ? "#10b981" : s === "fail" ? "#ef4444" : "#9ca3af");
+const metricText = (s: string) => (s === "pass" ? "达标" : s === "fail" ? "不达标" : "未采集");
+const analysisColor = (s: string) =>
+  s === "pass" ? "#2563eb" : s === "fail" ? "#ef4444" : s === "info" ? "#10b981" : "#9ca3af";
+const analysisLabel = (s: string) =>
+  s === "pass" ? "达标" : s === "fail" ? "不达标" : s === "info" ? "已记录" : "未采集/不适用";
 
 onMounted(fetchHospitals);
 </script>
@@ -270,18 +427,26 @@ onMounted(fetchHospitals);
     <!-- ═══════════ 视图① 医院卡片总览 ═══════════ -->
     <template v-if="viewMode === 'overview'">
       <ElCard shadow="never" class="mb-4">
-        <div class="flex flex-wrap items-center gap-3">
-          <ElInput v-model="hospitalQuery.hospital_name" placeholder="医院名称" clearable class="w-48" @keyup.enter="handleHospitalSearch" />
-          <ElSelect v-model="hospitalQuery.hospital_level" placeholder="医院等级" clearable class="w-32">
-            <ElOption v-for="lv in LEVEL_OPTIONS" :key="lv" :label="lv" :value="lv" />
-          </ElSelect>
-          <ElSelect v-model="hospitalQuery.province" placeholder="所在地区" clearable class="w-32">
-            <ElOption v-for="p in provinceOptions" :key="p" :label="p" :value="p" />
-          </ElSelect>
-          <ElSelect v-model="hospitalQuery.status" placeholder="医院状态" clearable class="w-28">
-            <ElOption label="正常" :value="1" />
-            <ElOption label="禁用" :value="0" />
-          </ElSelect>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+          <FaSearchItem label="医院名称">
+            <FaSearchInput v-model="hospitalQuery.hospital_name" placeholder="医院名称" clearable class="w-48" @keyup.enter="handleHospitalSearch" />
+          </FaSearchItem>
+          <FaSearchItem label="医院等级">
+            <ElSelect v-model="hospitalQuery.hospital_level" placeholder="医院等级" clearable class="w-32">
+              <ElOption v-for="lv in LEVEL_OPTIONS" :key="lv" :label="lv" :value="lv" />
+            </ElSelect>
+          </FaSearchItem>
+          <FaSearchItem label="所在地区">
+            <ElSelect v-model="hospitalQuery.province" placeholder="所在地区" clearable filterable class="w-32">
+              <ElOption v-for="p in provinceOptions" :key="p" :label="p" :value="p" />
+            </ElSelect>
+          </FaSearchItem>
+          <FaSearchItem label="医院状态">
+            <ElSelect v-model="hospitalQuery.status" placeholder="医院状态" clearable class="w-28">
+              <ElOption label="正常" :value="1" />
+              <ElOption label="禁用" :value="0" />
+            </ElSelect>
+          </FaSearchItem>
           <ElButton type="primary" @click="handleHospitalSearch">查询</ElButton>
           <ElButton @click="handleHospitalReset">重置</ElButton>
         </div>
@@ -355,33 +520,51 @@ onMounted(fetchHospitals);
 
       <ElCard shadow="never">
         <!-- 病例搜索筛选 -->
-        <div class="mb-4 flex flex-wrap items-center gap-3">
-          <ElInput
-            v-model="caseQuery.case_no"
-            placeholder="病例编号（完整精确/片段模糊）"
-            clearable
-            class="w-56"
-            @keyup.enter="handleCaseSearch"
-          />
-          <ElInput v-model="caseQuery.doctor_name" placeholder="医生姓名" clearable class="w-32" @keyup.enter="handleCaseSearch" />
-          <ElInput v-model="caseQuery.patient_name" placeholder="患者姓名" clearable class="w-32" @keyup.enter="handleCaseSearch" />
-          <ElSelect v-model="caseQuery.doctor_id" placeholder="所属医生" clearable filterable class="w-36">
-            <ElOption v-for="d in doctorOptions" :key="d.id" :label="d.real_name" :value="d.id" />
-          </ElSelect>
-          <ElDatePicker
-            v-model="caseQuery.dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="提交开始时间"
-            end-placeholder="提交结束时间"
-            value-format="YYYY-MM-DD"
-            class="!w-60"
-          />
-          <ElSelect v-model="caseQuery.status" placeholder="审核状态" clearable class="w-32">
-            <ElOption v-for="s in STATUS_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
-          </ElSelect>
+        <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+          <FaSearchItem label="病例编号">
+            <FaSearchInput
+              v-model="caseQuery.case_no"
+              placeholder="病例编号"
+              clearable
+              class="w-56"
+              @keyup.enter="handleCaseSearch"
+            />
+          </FaSearchItem>
+          <FaSearchItem label="医生姓名">
+            <FaSearchInput v-model="caseQuery.doctor_name" placeholder="医生姓名" clearable class="w-32" @keyup.enter="handleCaseSearch" />
+          </FaSearchItem>
+          <FaSearchItem label="患者姓名">
+            <FaSearchInput v-model="caseQuery.patient_name" placeholder="患者姓名" clearable class="w-32" @keyup.enter="handleCaseSearch" />
+          </FaSearchItem>
+          <FaSearchItem label="所属医生">
+            <ElSelect v-model="caseQuery.doctor_id" placeholder="所属医生" clearable filterable class="w-36">
+              <ElOption v-for="d in doctorOptions" :key="d.id" :label="d.real_name" :value="d.id" />
+            </ElSelect>
+          </FaSearchItem>
+          <FaSearchItem label="提交时间">
+            <ElDatePicker
+              v-model="caseQuery.dateRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始"
+              end-placeholder="结束"
+              value-format="YYYY-MM-DD"
+              class="!w-60"
+            />
+          </FaSearchItem>
+          <FaSearchItem label="审核状态">
+            <ElSelect v-model="caseQuery.status" placeholder="审核状态" clearable class="w-32">
+              <ElOption v-for="s in STATUS_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
+            </ElSelect>
+          </FaSearchItem>
           <ElButton type="primary" @click="handleCaseSearch">查询</ElButton>
           <ElButton @click="resetCaseQuery; fetchCases()">重置</ElButton>
+          <ElButton type="success" :loading="exporting" @click="handleExport">
+            <span class="i-ri:file-excel-line mr-1" />导出 Excel
+          </ElButton>
+          <ElButton type="primary" plain :loading="exportingPdf" @click="handleExportPdf">
+            <span class="i-ri:file-pdf-line mr-1" />导出 PDF
+          </ElButton>
         </div>
 
         <!-- 病例列表 -->
@@ -426,12 +609,19 @@ onMounted(fetchHospitals);
     <!-- ═══════════ 病例详情弹窗（大尺寸只读）═══════════ -->
     <ElDialog
       v-model="detailVisible"
-      title="病例详情"
       width="920px"
       top="4vh"
       :close-on-click-modal="false"
       class="case-detail-dialog"
     >
+      <template #header>
+        <div class="flex w-full items-center justify-between pr-6">
+          <span class="text-base font-semibold text-gray-800">病例详情</span>
+          <ElButton type="primary" plain size="small" :loading="exportingDetailPdf" @click="handleExportPdfDetail">
+            <span class="i-ri:printer-line mr-1" />打印 / 导出 PDF
+          </ElButton>
+        </div>
+      </template>
       <div v-loading="detailLoading" class="max-h-[75vh] overflow-y-auto pr-1">
         <template v-if="detail">
           <!-- 模块一：病例基础信息 -->
@@ -477,16 +667,92 @@ onMounted(fetchHospitals);
             </ElDescriptions>
           </div>
 
-          <!-- 模块三：救治过程（字段字典自动渲染，三端统一） -->
+          <!-- 模块三：救治时间轴（节点时间线 + 关键质控指标，只读展示） -->
           <div class="mb-5">
             <div class="mb-2 flex items-center gap-2">
               <span class="i-ri:heart-pulse-line text-emerald-500" />
-              <span class="text-sm font-semibold text-gray-700">救治过程时间轴（填报数据）</span>
+              <span class="text-sm font-semibold text-gray-700">救治时间轴</span>
               <ElTag v-if="detail.template_name" size="small" type="info" effect="plain">{{ detail.template_name }}</ElTag>
             </div>
-            <ElDescriptions v-if="filledFields.length" :column="2" border size="small">
+
+            <!-- 关键质控指标卡片 -->
+            <div v-if="timelineData?.metrics?.length" class="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              <div v-for="m in timelineData.metrics" :key="m.key" class="rounded-lg border border-gray-100 bg-gray-50 p-2.5">
+                <div class="text-xs text-gray-400">{{ m.key }}</div>
+                <div class="mt-0.5 text-base font-bold" :style="{ color: metricColor(m.status) }">
+                  {{ m.minutes != null ? `${m.minutes} min` : "—" }}
+                </div>
+                <div class="mt-0.5 text-xs font-medium" :style="{ color: metricColor(m.status) }">{{ metricText(m.status) }}</div>
+              </div>
+            </div>
+
+            <!-- 节点时间线 -->
+            <ElTimeline v-if="timelineData?.nodes?.length" class="!pt-1">
+              <ElTimelineItem
+                v-for="n in timelineData.nodes"
+                :key="n.code"
+                :hollow="!n.value"
+                :type="n.value ? 'primary' : 'info'"
+                size="normal"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700">{{ n.name }}</span>
+                  <span class="text-sm font-semibold" :class="n.value ? 'text-gray-900' : 'text-gray-400'">
+                    {{ n.time || n.value || "未采集" }}
+                  </span>
+                </div>
+              </ElTimelineItem>
+            </ElTimeline>
+            <ElEmpty v-else description="暂无时间轴数据" :image-size="50" />
+          </div>
+
+          <!-- 模块四：病例分析（质控指标校验 + 必填缺失清单） -->
+          <div class="mb-5">
+            <div class="mb-2 flex items-center gap-2">
+              <span class="i-ri:file-chart-line text-indigo-500" />
+              <span class="text-sm font-semibold text-gray-700">病例分析（质控指标校验）</span>
+            </div>
+
+            <div v-if="analysisData?.items?.length" class="space-y-2">
+              <div
+                v-for="m in analysisData.items"
+                :key="m.key"
+                class="rounded-lg border-l-4 bg-gray-50 p-2.5"
+                :style="{ borderLeftColor: analysisColor(m.status) }"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-semibold text-gray-800">{{ m.name }}</span>
+                  <span class="text-xs font-semibold" :style="{ color: analysisColor(m.status) }">{{ analysisLabel(m.status) }}</span>
+                </div>
+                <div class="mt-0.5 text-xs text-gray-400">{{ m.desc }}</div>
+                <div class="mt-1 flex items-center justify-between text-xs">
+                  <span class="text-gray-500">实际值：{{ m.minutes != null ? `${m.minutes} min` : "未采集" }}</span>
+                  <span v-if="m.limit != null" class="text-gray-400">标准：≤{{ m.limit }} min</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="analysisData?.missing_required?.length" class="mt-3 rounded-lg bg-rose-50 p-3">
+              <div class="mb-1 text-xs font-semibold text-rose-600">缺失必填字段（请补录）</div>
+              <div class="flex flex-wrap gap-1.5">
+                <ElTag v-for="ms in analysisData.missing_required" :key="ms.field_code" type="danger" size="small" effect="light">
+                  {{ ms.field_name }}
+                </ElTag>
+              </div>
+            </div>
+            <ElEmpty v-if="!analysisData?.items?.length" description="暂无分析数据" :image-size="50" />
+          </div>
+
+          <!-- 模块五：全部填报数据（字段字典自动渲染，三端统一） -->
+          <div class="mb-5">
+            <div class="mb-2 flex items-center gap-2">
+              <span class="i-ri:list-check text-sky-500" />
+              <span class="text-sm font-semibold text-gray-700">全部填报数据</span>
+            </div>
+            <!-- 文本字段：两列网格 -->
+            <ElDescriptions v-if="textFields.length" :column="2" border size="small">
               <ElDescriptionsItem
-                v-for="(f, idx) in filledFields"
+                v-for="(f, idx) in textFields"
                 :key="idx"
                 :label="f.name"
                 :span="f.long ? 2 : 1"
@@ -494,10 +760,69 @@ onMounted(fetchHospitals);
                 <span :class="{ 'whitespace-pre-wrap': f.long }">{{ f.value }}</span>
               </ElDescriptionsItem>
             </ElDescriptions>
-            <ElEmpty v-else description="该病例暂无填报数据" :image-size="60" />
+
+            <!-- 图片字段：每个独立全宽卡片，真正"占一行" -->
+            <div v-if="imageFields.length" :class="textFields.length ? 'mt-4' : ''" class="space-y-4">
+              <div
+                v-for="(f, idx) in imageFields"
+                :key="`img-${idx}`"
+                class="overflow-hidden rounded-lg border border-gray-100 bg-white"
+              >
+                <div class="border-b border-gray-100 bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-700">
+                  {{ f.name }}
+                </div>
+                <div class="p-4">
+                  <img
+                    v-if="f.value && f.value !== '-'"
+                    :src="imageSrc(f.value)"
+                    class="w-full cursor-zoom-in rounded-lg object-contain"
+                    style="max-height: 320px"
+                    :alt="f.name"
+                    @click="openImage(imageSrc(f.value))"
+                  />
+                  <span v-else class="text-gray-400">无图片</span>
+                </div>
+              </div>
+            </div>
+
+            <ElEmpty v-if="!filledFields.length" description="该病例暂无填报数据" :image-size="60" />
           </div>
 
-          <!-- 模块四：完整审核信息 -->
+          <!-- 心电图 AI 诊断（图片 + AI 诊断 + 协同总结） -->
+          <div class="mb-5">
+            <div class="mb-2 flex items-center gap-2">
+              <span class="i-ri:heart-pulse-line text-rose-500" />
+              <span class="text-sm font-semibold text-gray-700">心电图 AI 诊断</span>
+            </div>
+            <div v-if="(detail?.ecg_records || []).length" class="space-y-4">
+              <ElCard v-for="ecg in detail.ecg_records" :key="ecg.id" shadow="never" class="!border !border-gray-100">
+                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <div class="mb-1 text-xs text-gray-400">心电图图片</div>
+                    <img v-if="ecg.image_path" :src="ecg.image_path" class="w-full rounded-lg border border-gray-100 object-contain" style="max-height: 320px" alt="心电图" />
+                    <ElEmpty v-else description="无图片" :image-size="50" />
+                  </div>
+                  <div class="space-y-2">
+                    <div>
+                      <div class="text-xs text-gray-400">AI 诊断意见</div>
+                      <div class="mt-1 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">{{ ecg.ai_diagnosis || "-" }}</div>
+                    </div>
+                    <div>
+                      <div class="text-xs text-gray-400">协同总结（发给接收方）</div>
+                      <div class="mt-1 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">{{ ecg.ai_summary || "-" }}</div>
+                    </div>
+                    <div v-if="ecg.feedback">
+                      <div class="text-xs text-gray-400">接收方反馈</div>
+                      <div class="mt-1 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">{{ ecg.feedback }}</div>
+                    </div>
+                  </div>
+                </div>
+              </ElCard>
+            </div>
+            <ElEmpty v-else description="该病例暂无心电图记录" :image-size="60" />
+          </div>
+
+          <!-- 模块六：完整审核信息 -->
           <div>
             <div class="mb-2 flex items-center gap-2">
               <span class="i-ri:file-shield-line text-amber-500" />

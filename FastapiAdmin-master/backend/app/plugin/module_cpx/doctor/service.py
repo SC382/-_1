@@ -204,7 +204,7 @@ class DoctorService:
     async def update(self, *, id: int, data) -> dict:
         case = await self._get_own_case(id)
         if case.status not in EDITABLE_STATUS:
-            raise CustomException(msg="当前状态不可修改基础信息")
+            raise CustomException(msg="当前状态不可修改基础信息", status_code=400)
         payload = data.model_dump(exclude_unset=True)
         for key, value in payload.items():
             setattr(case, key, value)
@@ -217,7 +217,7 @@ class DoctorService:
     async def save_form(self, *, id: int, template_id: int, form_data: dict) -> dict:
         case = await self._get_own_case(id)
         if case.status not in EDITABLE_STATUS:
-            raise CustomException(msg="当前状态不可编辑，仅草稿/驳回可修改")
+            raise CustomException(msg="当前状态不可编辑，仅草稿/驳回可修改", status_code=400)
         detail = (
             await self.db.execute(select(CaseDetailModel).where(CaseDetailModel.case_id == id))
         ).scalars().first()
@@ -238,7 +238,7 @@ class DoctorService:
         """提交审核：按该病例所用模板的必填字段做完整性校验 + 救治时间逻辑校验。"""
         case = await self._get_own_case(id)
         if case.status not in EDITABLE_STATUS:
-            raise CustomException(msg="当前状态不可提交审核")
+            raise CustomException(msg="当前状态不可提交审核", status_code=400)
 
         detail = (
             await self.db.execute(select(CaseDetailModel).where(CaseDetailModel.case_id == id))
@@ -441,6 +441,27 @@ class DoctorService:
             )
         ).scalars().all()
 
+        ecg_rows = (
+            await self.db.execute(
+                select(EcgConsultModel)
+                .where(EcgConsultModel.case_id == id)
+                .order_by(EcgConsultModel.create_time.desc())
+            )
+        ).scalars().all()
+        ecg_records = [
+            {
+                "id": e.id,
+                "case_id": e.case_id,
+                "image_path": e.image_path,
+                "status": e.status,
+                "ai_diagnosis": e.ai_diagnosis,
+                "ai_summary": e.ai_summary,
+                "feedback": e.feedback,
+                "create_time": e.create_time.isoformat() if e.create_time else None,
+            }
+            for e in ecg_rows
+        ]
+
         return {
             "id": case.id,
             "case_no": case.case_no,
@@ -450,6 +471,14 @@ class DoctorService:
             "phone": case.phone,
             "come_type": case.come_type,
             "diagnose_type": case.diagnose_type,
+            "id_type": case.id_type,
+            "id_number": case.id_number,
+            "birth_date": case.birth_date.strftime("%Y-%m-%d") if case.birth_date else None,
+            "onset_address": case.onset_address,
+            "detail_address": case.detail_address,
+            "insurance_type": case.insurance_type,
+            "insurance_no": case.insurance_no,
+            "first_contact_time": case.first_contact_time.strftime("%Y-%m-%d %H:%M") if case.first_contact_time else None,
             "hospital_name": case.hospital.hospital_name if case.hospital else None,
             "status": case.status,
             "create_time": case.create_time.isoformat() if case.create_time else None,
@@ -469,6 +498,7 @@ class DoctorService:
                 }
                 for a in audits
             ],
+            "ecg_records": ecg_records,
         }
 
     # ── 修改密码 ──────────────────────────────────────────
@@ -1119,7 +1149,73 @@ class DoctorService:
         return diagnosis, summary
 
     @staticmethod
-    async def _ai_diagnose(case: CaseRecordModel | None, form_data: dict | None) -> tuple[str, str]:
+    async def _ecg_vision_findings(image_path: str | None) -> str | None:
+        """用智谱视觉(glm-4v-flash)识别心电图图片，返回关键所见文本；无 Key 或失败返回 None。"""
+        import base64 as _b64
+        import mimetypes
+        from pathlib import Path as _Path
+        from urllib.parse import urlparse
+
+        from app.config.path_conf import STATIC_DIR
+
+        if not image_path or not settings.ZHIPU_API_KEY or settings.ZHIPU_API_KEY.startswith("sk-placeholder"):
+            return None
+        try:
+            if image_path.startswith("data:"):
+                data_uri = image_path
+            else:
+                path = image_path
+                if "://" in path:
+                    parsed = urlparse(path)
+                    host = (parsed.hostname or "").lower()
+                    if host in ("127.0.0.1", "localhost", "0.0.0.0", "::1") or host.startswith("192.168.") or host.startswith("10.") or host.startswith("172."):
+                        path = parsed.path
+                    else:
+                        return None
+                if "/api/v1/static/" in path:
+                    path = path.split("/api/v1/static/", 1)[1]
+                elif "/static/" in path:
+                    path = path.split("/static/", 1)[1]
+                else:
+                    return None
+                fp = _Path(str(STATIC_DIR)) / path
+                if not fp.exists():
+                    return None
+                mime = mimetypes.guess_type(str(fp))[0] or "image/jpeg"
+                b64 = _b64.b64encode(fp.read_bytes()).decode()
+                data_uri = f"data:{mime};base64,{b64}"
+            prompt = (
+                "你是心电图判读助手。请描述这张心电图的关键所见：节律、心率、ST段、T波、"
+                "有无异常偏移或梗死样改变。只输出中文要点，不超过150字，不要解释。"
+            )
+            model = settings.ZHIPU_VISION_MODEL or "glm-4v-flash"
+            import httpx
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    settings.ZHIPU_BASE_URL.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.ZHIPU_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": [
+                            {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+                            {"type": "text", "text": prompt},
+                        ]}],
+                        "max_tokens": 400,
+                        "temperature": 0.1,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            msg = ((data.get("choices") or [{}])[0].get("message") or {})
+            text = (msg.get("content") or "").strip()
+            if not text:
+                text = (msg.get("reasoning_content") or "").strip()
+            return text or None
+        except Exception:
+            return None
+
+    @staticmethod
+    async def _ai_diagnose(case: CaseRecordModel | None, form_data: dict | None, image_findings: str | None = None) -> tuple[str, str]:
         """调用 DeepSeek V4 Flash 生成心电图 AI 诊断意见 + 协同总结；接口异常时回退本地兜底。
 
         返回 (diagnosis, summary)。
@@ -1128,7 +1224,7 @@ class DoctorService:
         import re as _re
 
         # 未配置真实 Key → 直接用本地兜底
-        if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-placeholder"):
+        if not settings.DEEPSEEK_API_KEY or settings.DEEPSEEK_API_KEY.startswith("sk-placeholder"):
             return DoctorService._fallback_mock_diagnose(case, form_data)
 
         info = []
@@ -1150,10 +1246,11 @@ class DoctorService:
             info.append(f"发病时间：{onset}")
         patient_text = "；".join(info) if info else "未提供"
 
+        ecg_part = f"\n心电图影像（智谱视觉识别）所见：{image_findings}\n" if image_findings else ""
         prompt = (
             "你是心血管内科心电图AI辅助诊断助手。请根据以下患者信息与心电图检查场景，"
             "给出专业、简洁的中文心电图AI辅助诊断意见（diagnosis）和供接收医院会诊医生参考的协同总结（summary）。\n"
-            f"患者信息：{patient_text}\n"
+            f"患者信息：{patient_text}{ecg_part}\n"
             "要求：诊断意见覆盖节律、ST段改变、可能诊断与建议；协同总结面向接收医院的会诊医生，"
             "给出明确的进一步检查/处置建议，100字以内。\n"
             "请严格只输出如下 JSON，不要输出任何其他内容：\n"
@@ -1163,13 +1260,13 @@ class DoctorService:
             import httpx
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
-                    settings.OPENAI_BASE_URL.rstrip("/") + "/chat/completions",
+                    settings.DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                        "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": settings.OPENAI_MODEL,
+                        "model": settings.DEEPSEEK_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 4000,
                         "temperature": 0.3,
@@ -1224,7 +1321,8 @@ class DoctorService:
             ).scalars().first()
             if detail:
                 form_data = detail.form_data or {}
-        diagnosis, summary = await self._ai_diagnose(case, form_data)
+        image_findings = await DoctorService._ecg_vision_findings(image_path)
+        diagnosis, summary = await self._ai_diagnose(case, form_data, image_findings=image_findings)
         info_snapshot = (
             {"patient_name": case.patient_name, "gender": case.gender, "age": case.age,
              "come_type": case.come_type, "diagnose_type": case.diagnose_type, "form_data": form_data}
