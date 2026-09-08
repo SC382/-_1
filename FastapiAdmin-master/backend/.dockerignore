@@ -1,0 +1,14 @@
+# 不打包进镜像，加速构建并避免把医院数据/密钥烤进镜像
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+tests
+dist
+static
+.git
+.env
+.env.*
+!.env.example
+*.md

@@ -275,23 +275,7 @@ class AuditService:
         self.db.add(record)
 
         # 审核通过 → 自动将病例填入随访档案，生成 1/3/6/12 月随访计划（幂等：已有随访则跳过）
-        exists = await self.db.execute(
-            select(FollowUpModel.id).where(FollowUpModel.case_id == case.id)
-        )
-        if not exists.scalars().first():
-            base = case.update_time or case.create_time or datetime.now()
-            for month in (1, 3, 6, 12):
-                self.db.add(
-                    FollowUpModel(
-                        case_id=case.id,
-                        patient_name=case.patient_name,
-                        hospital_id=case.hospital_id,
-                        doctor_id=case.doctor_id,
-                        plan_month=month,
-                        due_date=base + timedelta(days=month * 30),
-                        status="pending",
-                    )
-                )
+        await self._ensure_followups(case)
 
         await self.db.flush()
         return {"id": case.id, "status": case.status}
@@ -379,10 +363,53 @@ class AuditService:
 
         case.status = "approved" if audit_result == "pass" else "rejected"
         self.db.add(case)
+        # 改为通过后同样补建随访计划（幂等）；驳回时不生成
+        if case.status == "approved":
+            await self._ensure_followups(case)
         await self.db.flush()
         return {"id": record.id, "case_id": case.id, "status": case.status, "audit_result": audit_result}
 
     # ── 辅助 ────────────────────────────────────────────────
+
+    async def _followup_base_date(self, case: CaseRecordModel):
+        """随访起算日：优先取出院日期（form_data.discharge_date），取不到时退回病例时间。
+
+        说明：原先直接用 case.update_time 作基准，而该字段会随病例任意修改而变动，
+        导致随访到期日漂移（历史数据里出现过 1 月随访到期日早于出院日期的情况）。
+        """
+        res = await self.db.execute(
+            select(CaseDetailModel).where(CaseDetailModel.case_id == case.id)
+        )
+        detail = res.scalars().first()
+        form_data = detail.form_data or {} if detail else {}
+        raw = form_data.get("discharge_date") or form_data.get("出院日期")
+        if raw:
+            try:
+                return datetime.strptime(str(raw)[:10], "%Y-%m-%d")
+            except ValueError:
+                pass
+        return case.update_time or case.create_time or datetime.now()
+
+    async def _ensure_followups(self, case: CaseRecordModel) -> None:
+        """审核通过后确保该病例存在 1/3/6/12 月随访计划（幂等：已有随访则跳过）。"""
+        exists = await self.db.execute(
+            select(FollowUpModel.id).where(FollowUpModel.case_id == case.id)
+        )
+        if exists.scalars().first():
+            return
+        base = await self._followup_base_date(case)
+        for month in (1, 3, 6, 12):
+            self.db.add(
+                FollowUpModel(
+                    case_id=case.id,
+                    patient_name=case.patient_name,
+                    hospital_id=case.hospital_id,
+                    doctor_id=case.doctor_id,
+                    plan_month=month,
+                    due_date=base + timedelta(days=month * 30),
+                    status="pending",
+                )
+            )
 
     async def _get_hospital_case(self, case_id: int) -> CaseRecordModel:
         case = await self.db.get(CaseRecordModel, case_id)

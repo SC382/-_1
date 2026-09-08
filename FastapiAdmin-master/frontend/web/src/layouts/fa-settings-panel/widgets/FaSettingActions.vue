@@ -76,7 +76,6 @@ const CONFIG_ITEMS: ConfigItem[] = [
   { comment: "是否显示语言切换", key: "showLanguage" },
   { comment: "是否显示进度条", key: "showNprogress" },
   { comment: "是否显示设置引导", key: "showSettingGuide" },
-  { comment: "是否显示节日文本", key: "showFestivalText" },
   { comment: "是否显示水印", key: "watermarkVisible" },
   { comment: "是否显示应用 Logo 与系统标题", key: "showAppLogo" },
   { comment: "登录后是否开启新手引导", key: "showGuide" },
@@ -86,17 +85,11 @@ const CONFIG_ITEMS: ConfigItem[] = [
   { comment: "是否唯一展开", key: "uniqueOpened" },
   { comment: "是否色弱模式", key: "colorWeak" },
   { comment: "是否刷新", key: "refresh" },
-  { comment: "是否加载节日烟花", key: "holidayFireworksLoaded" },
   { comment: "边框模式", key: "boxBorderMode" },
   { comment: "页面过渡效果", key: "pageTransition" },
   { comment: "标签页样式", key: "tabStyle" },
   { comment: "自定义圆角", key: "customRadius" },
   { comment: "容器宽度", key: "containerWidth", enumMap: ENUM_MAPS.containerWidth },
-  {
-    comment: "上次完成烟花播放的自然日(YYYY-MM-DD),留空可重新触发",
-    key: "festivalDate",
-    forceValue: "",
-  },
 ];
 
 /**
@@ -206,7 +199,6 @@ const handleResetConfig = async () => {
 
     // 界面显示（直接设置类方法）
     settingStore.setWorkTab(config.showWorkTab);
-    settingStore.setShowFestivalText(config.showFestivalText);
     settingStore.setWatermarkVisible(config.watermarkVisible);
     settingStore.updateSetting("showAppLogo", config.showAppLogo);
     settingStore.updateSetting("showGuide", config.showGuide);
@@ -228,10 +220,6 @@ const handleResetConfig = async () => {
     settingStore.setTabStyle(config.tabStyle);
     settingStore.setCustomRadius(config.customRadius);
     settingStore.setContainerWidth(config.containerWidth);
-
-    // 节日相关
-    settingStore.setFestivalDate(config.festivalDate);
-    settingStore.setholidayFireworksLoaded(config.holidayFireworksLoaded);
 
     location.reload();
   } catch (error) {

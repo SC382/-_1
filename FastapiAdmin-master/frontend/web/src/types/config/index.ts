@@ -19,20 +19,6 @@ export interface MenuLayout {
   description?: string;
 }
 
-/** 节日配置 */
-export interface FestivalConfig {
-  date: string;
-  endDate?: string;
-  name: string;
-  image: string;
-  scrollText: string;
-  isActive?: boolean;
-  count?: number;
-  fireworkInterval?: number;
-  skipFireworks?: boolean;
-  isResidentBanner?: boolean;
-}
-
 /** 系统基础配置 */
 export interface SystemBasicConfig {
   name: string;
@@ -50,7 +36,6 @@ export interface FastEnterBaseItem {
   routeName?: string;
   routeQuery?: Record<string, string>;
   link?: string;
-  isDialog?: boolean;
 }
 
 /** 快速入口应用项 */

@@ -47,7 +47,19 @@ target_metadata = MappedBase.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-alembic_config.set_main_option("sqlalchemy.url", settings.ASYNC_DB_URI)
+# ConfigParser 会对 % 做插值解析，ASYNC_DB_URI 中 quote_plus 编码的特殊字符（如 @ -> %%40）
+# 直接写入会被当成非法插值语法。写入前将 % 双写，读取后再恢复为单 %。
+alembic_config.set_main_option(
+    "sqlalchemy.url", settings.ASYNC_DB_URI.replace("%", "%%")
+)
+
+
+def _get_sqlalchemy_url() -> str:
+    """读取 Alembic 配置中的数据库 URL，并恢复单 %。"""
+    url = alembic_config.get_main_option("sqlalchemy.url")
+    if url is None:
+        raise ValueError("数据库URL未正确配置，请检查环境配置文件")
+    return url.replace("%%", "%")
 
 
 def run_migrations_offline() -> None:
@@ -64,10 +76,7 @@ def run_migrations_offline() -> None:
     返回:
     - None
     """
-    url = alembic_config.get_main_option("sqlalchemy.url")
-    # 确保URL不为None
-    if url is None:
-        raise ValueError("数据库URL未正确配置，请检查环境配置文件")
+    url = _get_sqlalchemy_url()
 
     context.configure(
         url=url,
@@ -89,11 +98,7 @@ def run_migrations_online() -> None:
     返回:
     - None
     """
-    url = alembic_config.get_main_option("sqlalchemy.url")
-    # 确保URL不为None
-    if url is None:
-        raise ValueError("数据库URL未正确配置，请检查环境配置文件")
-
+    url = _get_sqlalchemy_url()
     connectable = create_async_engine(url, poolclass=pool.NullPool)
 
     async def run_async_migrations() -> None:

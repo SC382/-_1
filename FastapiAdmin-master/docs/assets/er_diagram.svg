@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="100%" font-family="'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- 连线 -->
+  <g fill="none" stroke="#5F5E5A" stroke-width="1.2">
+    <path d="M100,88 V118 H160 V150" marker-end="url(#arw)"/>
+    <path d="M380,66 H250 V150" marker-end="url(#arw)"/>
+    <path d="M530,66 H645 V150" marker-end="url(#arw)"/>
+    <path d="M280,174 H560" marker-end="url(#arw)"/>
+    <path d="M160,198 H110 V280" marker-end="url(#arw)"/>
+    <path d="M250,198 H270 V280" marker-end="url(#arw)"/>
+    <path d="M645,198 H490 V290" marker-end="url(#arw)"/>
+    <path d="M645,198 V290" marker-end="url(#arw)"/>
+    <path d="M645,198 H795 V290" marker-end="url(#arw)"/>
+    <path d="M645,198 V360 H495 V410" marker-end="url(#arw)"/>
+    <path d="M645,198 V360 H660 V410" marker-end="url(#arw)"/>
+    <path d="M750,440 H600 V338 H560" marker-end="url(#arw)"/>
+    <path d="M820,458 V520" marker-end="url(#arw)"/>
+  </g>
+
+  <!-- 关系标注 -->
+  <g fill="#444441" font-size="12">
+    <text x="120" y="112">1:N</text>
+    <text x="300" y="112">1:N</text>
+    <text x="560" y="112">1:N</text>
+    <text x="420" y="168">提交 1:N</text>
+    <text x="135" y="248">1:1</text>
+    <text x="285" y="248">1:1</text>
+    <text x="560" y="250">1:N</text>
+    <text x="660" y="215">1:N</text>
+    <text x="700" y="270">1:N</text>
+    <text x="560" y="390">1:N 可空</text>
+    <text x="690" y="390">1:N</text>
+    <text x="640" y="420">被引用 1:N</text>
+    <text x="835" y="495">1:N</text>
+  </g>
+
+  <!-- 节点：根实体（灰） -->
+  <g>
+    <rect x="40" y="40" width="120" height="48" rx="8" fill="#D3D1C7" stroke="#5F5E5A" stroke-width="0.8"/>
+    <text x="100" y="62" text-anchor="middle" font-size="14" font-weight="500" fill="#2C2C2A">角色</text>
+    <text x="100" y="80" text-anchor="middle" font-size="11" fill="#444441">role</text>
+
+    <rect x="380" y="40" width="150" height="48" rx="8" fill="#D3D1C7" stroke="#5F5E5A" stroke-width="0.8"/>
+    <text x="455" y="62" text-anchor="middle" font-size="14" font-weight="500" fill="#2C2C2A">医院</text>
+    <text x="455" y="80" text-anchor="middle" font-size="11" fill="#444441">hospital（根）</text>
+  </g>
+
+  <!-- 人员主索引（蓝） -->
+  <g>
+    <rect x="130" y="150" width="150" height="48" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.8"/>
+    <text x="205" y="172" text-anchor="middle" font-size="14" font-weight="500" fill="#042C53">用户账号</text>
+    <text x="205" y="190" text-anchor="middle" font-size="11" fill="#0C447C">user_account</text>
+
+    <rect x="40" y="280" width="140" height="48" rx="8" fill="#CDE3FB" stroke="#185FA5" stroke-width="0.8"/>
+    <text x="110" y="302" text-anchor="middle" font-size="13" fill="#042C53">医生信息</text>
+    <text x="110" y="320" text-anchor="middle" font-size="11" fill="#0C447C">doctor_info</text>
+
+    <rect x="200" y="280" width="140" height="48" rx="8" fill="#CDE3FB" stroke="#185FA5" stroke-width="0.8"/>
+    <text x="270" y="302" text-anchor="middle" font-size="13" fill="#042C53">审核员信息</text>
+    <text x="270" y="320" text-anchor="middle" font-size="11" fill="#0C447C">auditor_info</text>
+  </g>
+
+  <!-- 业务主干（紫） -->
+  <g>
+    <rect x="560" y="150" width="170" height="48" rx="8" fill="#AFA9EC" stroke="#3C3489" stroke-width="0.8"/>
+    <text x="645" y="172" text-anchor="middle" font-size="14" font-weight="500" fill="#26215C">病例主表</text>
+    <text x="645" y="190" text-anchor="middle" font-size="11" fill="#3C3489">case_record（主干）</text>
+
+    <rect x="420" y="290" width="140" height="48" rx="8" fill="#D8D3F2" stroke="#3C3489" stroke-width="0.8"/>
+    <text x="490" y="312" text-anchor="middle" font-size="13" fill="#26215C">病例详情</text>
+    <text x="490" y="330" text-anchor="middle" font-size="11" fill="#3C3489">case_detail</text>
+
+    <rect x="580" y="290" width="130" height="48" rx="8" fill="#D8D3F2" stroke="#3C3489" stroke-width="0.8"/>
+    <text x="645" y="312" text-anchor="middle" font-size="13" fill="#26215C">审核记录</text>
+    <text x="645" y="330" text-anchor="middle" font-size="11" fill="#3C3489">audit_record</text>
+
+    <rect x="730" y="290" width="130" height="48" rx="8" fill="#D8D3F2" stroke="#3C3489" stroke-width="0.8"/>
+    <text x="795" y="312" text-anchor="middle" font-size="13" fill="#26215C">ACS随访</text>
+    <text x="795" y="330" text-anchor="middle" font-size="11" fill="#3C3489">follow_up</text>
+
+    <rect x="420" y="410" width="150" height="48" rx="8" fill="#D8D3F2" stroke="#3C3489" stroke-width="0.8"/>
+    <text x="495" y="432" text-anchor="middle" font-size="13" fill="#26215C">远程心电会诊</text>
+    <text x="495" y="450" text-anchor="middle" font-size="11" fill="#3C3489">ecg_consult</text>
+
+    <rect x="590" y="410" width="140" height="48" rx="8" fill="#D8D3F2" stroke="#3C3489" stroke-width="0.8"/>
+    <text x="660" y="432" text-anchor="middle" font-size="13" fill="#26215C">三会记录</text>
+    <text x="660" y="450" text-anchor="middle" font-size="11" fill="#3C3489">meeting_record</text>
+  </g>
+
+  <!-- 配置实体（琥珀） -->
+  <g>
+    <rect x="750" y="410" width="140" height="48" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text x="820" y="432" text-anchor="middle" font-size="13" fill="#412402">填报模板</text>
+    <text x="820" y="450" text-anchor="middle" font-size="11" fill="#633806">report_template</text>
+
+    <rect x="750" y="520" width="140" height="48" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text x="820" y="542" text-anchor="middle" font-size="13" fill="#412402">模板字段</text>
+    <text x="820" y="560" text-anchor="middle" font-size="11" fill="#633806">template_field</text>
+  </g>
+
+  <text x="450" y="590" text-anchor="middle" font-size="12" fill="#444441">说明：医生/审核员信息 1:1 挂用户账号；审核/随访/心电/三会均 1:N 挂病例主表；患者信息存病例主表，无独立 patient 表</text>
+</svg>

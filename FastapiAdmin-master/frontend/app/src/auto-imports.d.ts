@@ -12,6 +12,8 @@ declare global {
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
   const asyncComputed: typeof import('@vueuse/core')['asyncComputed']
   const autoResetRef: typeof import('@vueuse/core')['autoResetRef']
+  const cacheTpl: typeof import('./composables/useOfflineSync')['cacheTpl']
+  const clearSnapshot: typeof import('./composables/useOfflineSync')['clearSnapshot']
   const computed: typeof import('vue')['computed']
   const computedAsync: typeof import('@vueuse/core')['computedAsync']
   const computedEager: typeof import('@vueuse/core')['computedEager']
@@ -38,7 +40,10 @@ declare global {
   const defineStore: typeof import('pinia')['defineStore']
   const eagerComputed: typeof import('@vueuse/core')['eagerComputed']
   const effectScope: typeof import('vue')['effectScope']
+  const enqueueSave: typeof import('./composables/useOfflineSync')['enqueueSave']
+  const enqueueSubmit: typeof import('./composables/useOfflineSync')['enqueueSubmit']
   const extendRef: typeof import('@vueuse/core')['extendRef']
+  const flushQueue: typeof import('./composables/useOfflineSync')['flushQueue']
   const getActivePinia: typeof import('pinia')['getActivePinia']
   const getCurrentInstance: typeof import('vue')['getCurrentInstance']
   const getCurrentPath: typeof import('./utils/index')['getCurrentPath']
@@ -46,10 +51,13 @@ declare global {
   const getSystemTheme: typeof import('./utils/systemTheme')['getSystemTheme']
   const h: typeof import('vue')['h']
   const ignorableWatch: typeof import('@vueuse/core')['ignorableWatch']
+  const initOfflineSync: typeof import('./composables/useOfflineSync')['initOfflineSync']
   const initializeThemeOnce: typeof import('./utils/systemTheme')['initializeThemeOnce']
   const inject: typeof import('vue')['inject']
   const injectLocal: typeof import('@vueuse/core')['injectLocal']
+  const isAuthError: typeof import('./composables/useOfflineSync')['isAuthError']
   const isDefined: typeof import('@vueuse/core')['isDefined']
+  const isNetworkError: typeof import('./composables/useOfflineSync')['isNetworkError']
   const isProxy: typeof import('vue')['isProxy']
   const isReactive: typeof import('vue')['isReactive']
   const isReadonly: typeof import('vue')['isReadonly']
@@ -113,6 +121,8 @@ declare global {
   const reactiveComputed: typeof import('@vueuse/core')['reactiveComputed']
   const reactiveOmit: typeof import('@vueuse/core')['reactiveOmit']
   const reactivePick: typeof import('@vueuse/core')['reactivePick']
+  const readSnapshot: typeof import('./composables/useOfflineSync')['readSnapshot']
+  const readTplCache: typeof import('./composables/useOfflineSync')['readTplCache']
   const readonly: typeof import('vue')['readonly']
   const ref: typeof import('vue')['ref']
   const refAutoReset: typeof import('@vueuse/core')['refAutoReset']
@@ -253,6 +263,7 @@ declare global {
   const useNotify: typeof import('@wot-ui/ui')['useNotify']
   const useNow: typeof import('@vueuse/core')['useNow']
   const useObjectUrl: typeof import('@vueuse/core')['useObjectUrl']
+  const useOfflineSync: typeof import('./composables/useOfflineSync')['useOfflineSync']
   const useOffsetPagination: typeof import('@vueuse/core')['useOffsetPagination']
   const useOnline: typeof import('@vueuse/core')['useOnline']
   const usePageLeave: typeof import('@vueuse/core')['usePageLeave']
@@ -351,6 +362,7 @@ declare global {
   const watchTriggerable: typeof import('@vueuse/core')['watchTriggerable']
   const watchWithFilter: typeof import('@vueuse/core')['watchWithFilter']
   const whenever: typeof import('@vueuse/core')['whenever']
+  const writeSnapshot: typeof import('./composables/useOfflineSync')['writeSnapshot']
 }
 // for type re-export
 declare global {
@@ -370,6 +382,8 @@ declare module 'vue' {
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
+    readonly cacheTpl: UnwrapRef<typeof import('./composables/useOfflineSync')['cacheTpl']>
+    readonly clearSnapshot: UnwrapRef<typeof import('./composables/useOfflineSync')['clearSnapshot']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly computedAsync: UnwrapRef<typeof import('@vueuse/core')['computedAsync']>
     readonly computedEager: UnwrapRef<typeof import('@vueuse/core')['computedEager']>
@@ -396,7 +410,10 @@ declare module 'vue' {
     readonly defineStore: UnwrapRef<typeof import('pinia')['defineStore']>
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
+    readonly enqueueSave: UnwrapRef<typeof import('./composables/useOfflineSync')['enqueueSave']>
+    readonly enqueueSubmit: UnwrapRef<typeof import('./composables/useOfflineSync')['enqueueSubmit']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
+    readonly flushQueue: UnwrapRef<typeof import('./composables/useOfflineSync')['flushQueue']>
     readonly getActivePinia: UnwrapRef<typeof import('pinia')['getActivePinia']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentPath: UnwrapRef<typeof import('./utils/index')['getCurrentPath']>
@@ -404,10 +421,13 @@ declare module 'vue' {
     readonly getSystemTheme: UnwrapRef<typeof import('./utils/systemTheme')['getSystemTheme']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
     readonly ignorableWatch: UnwrapRef<typeof import('@vueuse/core')['ignorableWatch']>
+    readonly initOfflineSync: UnwrapRef<typeof import('./composables/useOfflineSync')['initOfflineSync']>
     readonly initializeThemeOnce: UnwrapRef<typeof import('./utils/systemTheme')['initializeThemeOnce']>
     readonly inject: UnwrapRef<typeof import('vue')['inject']>
     readonly injectLocal: UnwrapRef<typeof import('@vueuse/core')['injectLocal']>
+    readonly isAuthError: UnwrapRef<typeof import('./composables/useOfflineSync')['isAuthError']>
     readonly isDefined: UnwrapRef<typeof import('@vueuse/core')['isDefined']>
+    readonly isNetworkError: UnwrapRef<typeof import('./composables/useOfflineSync')['isNetworkError']>
     readonly isProxy: UnwrapRef<typeof import('vue')['isProxy']>
     readonly isReactive: UnwrapRef<typeof import('vue')['isReactive']>
     readonly isReadonly: UnwrapRef<typeof import('vue')['isReadonly']>
@@ -471,6 +491,8 @@ declare module 'vue' {
     readonly reactiveComputed: UnwrapRef<typeof import('@vueuse/core')['reactiveComputed']>
     readonly reactiveOmit: UnwrapRef<typeof import('@vueuse/core')['reactiveOmit']>
     readonly reactivePick: UnwrapRef<typeof import('@vueuse/core')['reactivePick']>
+    readonly readSnapshot: UnwrapRef<typeof import('./composables/useOfflineSync')['readSnapshot']>
+    readonly readTplCache: UnwrapRef<typeof import('./composables/useOfflineSync')['readTplCache']>
     readonly readonly: UnwrapRef<typeof import('vue')['readonly']>
     readonly ref: UnwrapRef<typeof import('vue')['ref']>
     readonly refAutoReset: UnwrapRef<typeof import('@vueuse/core')['refAutoReset']>
@@ -611,6 +633,7 @@ declare module 'vue' {
     readonly useNotify: UnwrapRef<typeof import('@wot-ui/ui')['useNotify']>
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
+    readonly useOfflineSync: UnwrapRef<typeof import('./composables/useOfflineSync')['useOfflineSync']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
     readonly useOnline: UnwrapRef<typeof import('@vueuse/core')['useOnline']>
     readonly usePageLeave: UnwrapRef<typeof import('@vueuse/core')['usePageLeave']>
@@ -707,5 +730,6 @@ declare module 'vue' {
     readonly watchTriggerable: UnwrapRef<typeof import('@vueuse/core')['watchTriggerable']>
     readonly watchWithFilter: UnwrapRef<typeof import('@vueuse/core')['watchWithFilter']>
     readonly whenever: UnwrapRef<typeof import('@vueuse/core')['whenever']>
+    readonly writeSnapshot: UnwrapRef<typeof import('./composables/useOfflineSync')['writeSnapshot']>
   }
 }

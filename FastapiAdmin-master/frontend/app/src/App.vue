@@ -1,5 +1,11 @@
 <script setup lang="ts">
-onLaunch(() => {})
+import { onLaunch } from '@dcloudio/uni-app'
+import { initOfflineSync } from '@/composables/useOfflineSync'
+
+onLaunch(() => {
+  // 全局离线填报同步：启动探测网络并在线自动重放离线队列；网络恢复即时重放
+  initOfflineSync()
+})
 </script>
 
 <style lang="scss">

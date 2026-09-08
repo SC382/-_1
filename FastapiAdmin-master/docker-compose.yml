@@ -1,0 +1,101 @@
+# 胸痛中心管理系统 - Docker 编排（全部容器化）
+# 用法：仓库根目录执行  docker compose up -d --build
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: cpx-mysql
+    restart: unless-stopped
+    environment:
+      # 默认值仅用于冒烟测试，生产请通过根目录 .env 设置 MYSQL_ROOT_PASSWORD
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-cpx_dev_pwd}
+      MYSQL_DATABASE: cpx
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --performance-schema=OFF --innodb-buffer-pool-size=128M
+    # 2G 内存优化：限制 MySQL 容器内存上限，避免 OOM
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-cpx_dev_pwd}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cpx
+
+  redis:
+    image: redis:7-alpine
+    container_name: cpx-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    # 2G 内存优化：限制 Redis 容器内存上限
+    deploy:
+      resources:
+        limits:
+          memory: 160M
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cpx
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cpx-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # 真实密钥从宿主机挂载进容器（不烤进镜像）
+    env_file:
+      - ./backend/env/.env.prod
+    # 2G 内存优化：限制后端容器内存上限
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    volumes:
+      # 上传真数据持久化（医生照片/会议PPTX/认证库/心电图图）
+      - backend_static:/app/static
+    ports:
+      - "8001:8001"
+    networks:
+      - cpx
+
+  web:
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
+    container_name: cpx-web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    volumes:
+      # 医生端 H5 静态产物（bind 只读：更新 H5 只需覆盖该目录后 docker compose restart web，无需重建镜像）
+      - ./frontend/app/dist/build/h5:/usr/share/nginx/html/app:ro
+      # nginx 配置（bind 只读：改 conf 后 docker compose up -d web 即生效，无需重建镜像）
+      - ./frontend/web/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - cpx
+
+volumes:
+  mysql_data:
+  redis_data:
+  backend_static:
+
+networks:
+  cpx:
+    driver: bridge

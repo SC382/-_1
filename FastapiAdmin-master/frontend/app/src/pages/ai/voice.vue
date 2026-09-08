@@ -27,6 +27,11 @@ const FIELDS_LABEL: Record<string, string> = {
   discharge_medication: '出院用药',
 }
 
+/** 选择目标病例：picker 下标 → caseId */
+function onCaseChange(e: { detail: { value: number } }) {
+  caseId.value = cases.value[e.detail.value].id
+}
+
 onLoad(async () => {
   try {
     const res = await DoctorAPI.myCases({ page_no: 1, page_size: 50 })
@@ -147,7 +152,7 @@ async function handleFill() {
       <picker
         :range="cases"
         range-key="case_no"
-        @change="(e) => { caseId = cases[e.detail.value].id }"
+        @change="onCaseChange"
       >
         <view class="picker-box" :class="{ empty: !caseId }">
           {{ cases.find((c) => c.id === caseId)?.case_no || '请选择病例' }}

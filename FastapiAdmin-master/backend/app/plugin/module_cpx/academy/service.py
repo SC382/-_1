@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.path_conf import STATIC_DIR
 from app.config.setting import settings
+from app.core.signed_url import sign_static_url
 from app.core.exceptions import CustomException
 
 from app.plugin.module_cpx.academy.schema import AcademyCreateSchema, AcademyUpdateSchema
@@ -37,7 +38,7 @@ def detect_type(suffix: str) -> str:
 
 def _to_public_url(rel_path: str) -> str:
     """static 相对路径 → 可访问 URL（/api/v1/static/...）。"""
-    return f"{settings.ROOT_PATH}{settings.STATIC_URL}/{rel_path.lstrip('/')}"
+    return sign_static_url(f"{settings.ROOT_PATH}{settings.STATIC_URL}/{rel_path.lstrip('/')}")
 
 
 def _serialize(item: AcademyContentModel) -> dict:

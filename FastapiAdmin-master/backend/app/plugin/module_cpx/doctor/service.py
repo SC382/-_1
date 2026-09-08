@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.setting import settings
 from app.core.exceptions import CustomException
+from app.core.signed_url import sign_static_url
 from app.utils.password_util import PwdUtil
 
 from app.plugin.module_cpx.auth.dependencies import BizAuth
@@ -857,6 +858,59 @@ class DoctorService:
 
         return {"total": len(groups), "items": groups}
 
+    async def followup_detail(self, *, id: int) -> dict:
+        """随访单条详情：随访全部字段（含扩展 form_data）+ 患者/病例上下文。"""
+        follow = await self.db.get(FollowUpModel, id)
+        if not follow:
+            raise CustomException(msg="随访任务不存在")
+        if follow.doctor_id != self.auth.user.id:
+            raise CustomException(msg="无权查看该随访", code=10403, status_code=403)
+
+        case = follow.case
+        form_data: dict = {}
+        if case:
+            d = (
+                await self.db.execute(
+                    select(CaseDetailModel).where(CaseDetailModel.case_id == case.id)
+                )
+            ).scalars().first()
+            form_data = d.form_data or {} if d else {}
+
+        # 扩展字段（新 35 字段分组表单）
+        ext: dict = {}
+        if follow.form_data:
+            try:
+                ext = json.loads(follow.form_data)
+            except (TypeError, ValueError):
+                ext = {}
+
+        base = {
+            "id": follow.id,
+            "case_id": follow.case_id,
+            "case_no": case.case_no if case else None,
+            "patient_name": follow.patient_name or (case.patient_name if case else None),
+            "gender": case.gender if case else None,
+            "age": case.age if case else None,
+            "phone": case.phone if case else None,
+            "come_type": case.come_type if case else None,
+            "diagnose_type": case.diagnose_type if case else None,
+            "inpatient_no": form_data.get("inpatient_no") or form_data.get("住院号") or None,
+            "discharge_date": form_data.get("discharge_date") or form_data.get("出院日期") or None,
+            "plan_month": follow.plan_month,
+            "due_date": follow.due_date.strftime("%Y-%m-%d") if follow.due_date else None,
+            "status": follow.status,
+            "follow_date": follow.follow_date.strftime("%Y-%m-%d") if follow.follow_date else None,
+            "follow_status": follow.follow_status,
+            "survival_status": follow.survival_status,
+            "risk_control": follow.risk_control,
+            "medication": follow.medication,
+            "remark": follow.remark,
+            "create_time": follow.create_time.strftime("%Y-%m-%d %H:%M:%S") if follow.create_time else None,
+            "update_time": follow.update_time.strftime("%Y-%m-%d %H:%M:%S") if follow.update_time else None,
+        }
+        # 扩展字段合并（基础字段优先，避免覆盖）
+        return {**ext, **base}
+
     async def me(self) -> dict:
         """当前医生基本信息（用于顶部标题栏等）。"""
         return {
@@ -876,8 +930,44 @@ class DoctorService:
             raise CustomException(msg="该随访已提交")
 
         payload = data.model_dump(exclude_unset=True)
-        for key, value in payload.items():
-            setattr(follow, key, value)
+
+        # 必填校验（仅已随访；未随访走失访分支只填备注）
+        if payload.get("follow_status") == "followed":
+            for required, label in (
+                ("info_channel", "信息获取途径"),
+                ("survival_status", "随访状态"),
+                ("current_condition", "目前状况"),
+                ("cardiac_rehab", "加入心脏康复计划"),
+                ("mace", "出院后主要心血管不良事件"),
+            ):
+                if not str(payload.get(required) or "").strip():
+                    raise CustomException(msg=f"请填写{label}")
+
+        # 扩展字段（除旧列外）→ form_data JSON
+        legacy_cols = {"follow_date", "follow_status", "survival_status",
+                       "risk_control", "medication", "remark"}
+        ext = {k: v for k, v in payload.items()
+               if k not in legacy_cols and v not in (None, "")}
+        if ext:
+            follow.form_data = json.dumps(ext, ensure_ascii=False)
+
+        # 兼容写入旧列
+        if payload.get("follow_date"):
+            try:
+                follow.follow_date = datetime.strptime(str(payload["follow_date"])[:10], "%Y-%m-%d")
+            except ValueError:
+                pass
+        if "follow_status" in payload:
+            follow.follow_status = payload["follow_status"]
+        if "survival_status" in payload:
+            follow.survival_status = payload["survival_status"]
+        if "risk_control" in payload:
+            follow.risk_control = payload["risk_control"]
+        if "medication" in payload:
+            follow.medication = payload["medication"]
+        if "remark" in payload:
+            follow.remark = payload["remark"]
+
         follow.status = "submitted"
         self.db.add(follow)
         await self.db.flush()
@@ -1381,6 +1471,27 @@ class DoctorService:
                     "feedback_time": r.feedback_time.isoformat() if r.feedback_time else None,
                 }
             )
+        return {"items": items}
+
+    async def ecg_list_by_case(self, *, case_id: int) -> dict:
+        """某病例的全部心电记录（供随访页「心电图」联动下拉）。"""
+        rows = (
+            await self.db.execute(
+                select(EcgConsultModel)
+                .where(EcgConsultModel.case_id == case_id)
+                .order_by(EcgConsultModel.create_time.desc())
+            )
+        ).scalars().all()
+        items = [
+            {
+                "id": r.id,
+                "image_path": self._abs_static_url(r.image_path),
+                "status": r.status,
+                "ai_summary": r.ai_summary,
+                "create_time": r.create_time.strftime("%Y-%m-%d %H:%M:%S") if r.create_time else None,
+            }
+            for r in rows
+        ]
         return {"items": items}
 
     async def ecg_detail(self, *, id: int) -> dict:
@@ -2417,4 +2528,4 @@ class DoctorService:
         target = upload_dir / filename
         target.write_bytes(content)
 
-        return f"{settings.ROOT_PATH}{settings.STATIC_URL}/uploads/doctor/{sub}/{filename}"
+        return sign_static_url(f"{settings.ROOT_PATH}{settings.STATIC_URL}/uploads/doctor/{sub}/{filename}")

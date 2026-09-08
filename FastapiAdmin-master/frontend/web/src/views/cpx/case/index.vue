@@ -4,10 +4,11 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { saveAs } from "file-saver";
 import HospitalAPI, { type HospitalTable } from "@/api/cpx/hospital";
-import CaseAPI, { type CaseDetail, type CaseTable, type CaseTimeline, type CaseAnalysis } from "@/api/cpx/case";
+import CaseAPI, { type CaseDetail, type CaseTable, type CaseTimeline, type CaseAnalysis, type CaseFollowup, type CaseFollowupItem, FOLLOW_STATUS_TEXT, FOLLOW_DONE_TEXT, SURVIVAL_TEXT, PLAN_MONTH_TEXT } from "@/api/cpx/case";
 import UserAPI, { type DoctorTable } from "@/api/cpx/user";
 import FaSearchInput from "@/components/forms/fa-search-input/index.vue";
 import FaSearchItem from "@/components/forms/fa-search-item/index.vue";
+import { FOLLOWUP_EXT_GROUPS } from "./followup-fields";
 
 defineOptions({ name: "CpxCase" });
 
@@ -215,6 +216,17 @@ const detailLoading = ref(false);
 const detail = ref<CaseDetail | null>(null);
 const timelineData = ref<CaseTimeline | null>(null);
 const analysisData = ref<CaseAnalysis | null>(null);
+const followupData = ref<CaseFollowup | null>(null);
+
+/** 取随访扩展字段显示值（未填/空 → "-"）；ecg_image 为后端转好的可访问 URL */
+function fuVal(fu: CaseFollowupItem, key: string): string {
+  const v = fu.form_data?.[key];
+  return v != null && String(v).trim() !== "" ? String(v) : "-";
+}
+function fuImage(fu: CaseFollowupItem, key: string): string {
+  const v = fu.form_data?.[key];
+  return v != null && String(v).trim() !== "" ? String(v) : "";
+}
 
 async function openDetail(row: CaseTable) {
   detailVisible.value = true;
@@ -222,13 +234,15 @@ async function openDetail(row: CaseTable) {
   try {
     const res = await CaseAPI.detail(row.id);
     detail.value = res.data.data;
-    // 并行拉取时间轴与单病例分析（详情页只读展示，非时间采集）
-    const [tl, an] = await Promise.all([
+    // 并行拉取时间轴、单病例分析与随访记录（详情页只读展示，非时间采集）
+    const [tl, an, fu] = await Promise.all([
       CaseAPI.timeline(row.id).then((r) => r.data.data).catch(() => null),
       CaseAPI.analysis(row.id).then((r) => r.data.data).catch(() => null),
+      CaseAPI.followup(row.id).then((r) => r.data.data).catch(() => null),
     ]);
     timelineData.value = tl;
     analysisData.value = an;
+    followupData.value = fu;
   } finally {
     detailLoading.value = false;
   }
@@ -820,6 +834,65 @@ onMounted(fetchHospitals);
               </ElCard>
             </div>
             <ElEmpty v-else description="该病例暂无心电图记录" :image-size="60" />
+          </div>
+
+          <!-- 模块：随访记录详情 -->
+          <div class="mb-5">
+            <div class="mb-2 flex items-center gap-2">
+              <span class="i-ri:stethoscope-line text-teal-500" />
+              <span class="text-sm font-semibold text-gray-700">随访记录</span>
+              <ElTag v-if="followupData?.total" size="small" type="info" effect="plain">{{ followupData.total }} 条</ElTag>
+            </div>
+            <div v-if="followupData?.items?.length" class="space-y-4">
+              <ElCard v-for="fu in followupData.items" :key="fu.id" shadow="never" class="!border !border-gray-100">
+                <div class="mb-2 flex items-center justify-between">
+                  <span class="text-sm font-semibold text-gray-800">
+                    {{ fu.plan_month != null ? (PLAN_MONTH_TEXT[fu.plan_month] || `${fu.plan_month} 个月`) : "随访" }}随访计划
+                  </span>
+                  <ElTag :type="fu.status === 'overdue' ? 'danger' : fu.status === 'submitted' ? 'success' : 'warning'" size="small" effect="light">
+                    {{ FOLLOW_STATUS_TEXT[fu.status || ''] || fu.status || "—" }}
+                  </ElTag>
+                </div>
+                <ElDescriptions :column="2" border size="small">
+                  <ElDescriptionsItem label="应随访日期">{{ fu.due_date ? fu.due_date.slice(0, 10) : "—" }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="实际随访日期">{{ fu.follow_date ? fu.follow_date.slice(0, 10) : "—" }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="随访状态">
+                    <ElTag v-if="fu.follow_status" :type="fu.follow_status === 'followed' ? 'success' : 'info'" size="small" effect="light">
+                      {{ FOLLOW_DONE_TEXT[fu.follow_status] || fu.follow_status }}
+                    </ElTag>
+                    <span v-else>—</span>
+                  </ElDescriptionsItem>
+                  <ElDescriptionsItem label="生存状态">
+                    <ElTag v-if="fu.survival_status" :type="fu.survival_status === 'alive' ? 'success' : fu.survival_status === 'dead' ? 'danger' : 'info'" size="small" effect="light">
+                      {{ SURVIVAL_TEXT[fu.survival_status] || fu.survival_status }}
+                    </ElTag>
+                    <span v-else>—</span>
+                  </ElDescriptionsItem>
+                  <ElDescriptionsItem label="创建医生">{{ fu.doctor_name || "—" }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="创建时间">{{ fu.create_time ? fu.create_time.slice(0, 10) : "—" }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="危险因素控制" :span="2">{{ fu.risk_control || "—" }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="用药情况" :span="2">{{ fu.medication || "—" }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="备注" :span="2">{{ fu.remark || "—" }}</ElDescriptionsItem>
+                </ElDescriptions>
+
+                <!-- App 端完整随访表单（form_data JSON 展开，6 大分组） -->
+                <template v-if="fu.form_data && Object.keys(fu.form_data).length">
+                  <div class="mt-4 border-t border-dashed border-gray-200 pt-3">
+                    <div class="mb-2 text-xs font-medium text-teal-600">完整随访表单（App 填报）</div>
+                    <div v-for="grp in FOLLOWUP_EXT_GROUPS" :key="grp.name" class="mb-3">
+                      <div class="mb-1 text-xs text-gray-400">{{ grp.name }}</div>
+                      <ElDescriptions :column="2" border size="small">
+                        <ElDescriptionsItem v-for="f in grp.fields" :key="f.key" :label="f.label" :span="f.type === 'image' ? 2 : undefined">
+                          <img v-if="f.type === 'image' && fuImage(fu, f.key)" :src="fuImage(fu, f.key)" class="max-w-full rounded border border-gray-100 object-contain" style="max-height: 220px" alt="随访心电图" />
+                          <span v-else>{{ fuVal(fu, f.key) }}</span>
+                        </ElDescriptionsItem>
+                      </ElDescriptions>
+                    </div>
+                  </div>
+                </template>
+              </ElCard>
+            </div>
+            <ElEmpty v-else description="该病例暂无随访记录" :image-size="60" />
           </div>
 
           <!-- 模块六：完整审核信息 -->

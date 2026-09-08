@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import DoctorAPI, { type CaseRecordItem, type FieldDict } from '@/api/module_cpx/doctor'
+import DoctorAPI, { type CaseRecordItem, type FieldDict, type TemplateField } from '@/api/module_cpx/doctor'
 
 definePage({
   name: 'ai-ocr',
@@ -35,13 +35,22 @@ onLoad(async () => {
 function buildFieldNameMap(dict: FieldDict) {
   const map: Record<string, string> = {}
   for (const f of dict.fields) {
-    if (f.field_code) map[f.field_code] = f.field_name || f.field_code
+    // 字典接口(field_dict)元素键名为 code/name；模板字段(template_fields)为 field_code/field_name，两者兼容
+    const alt = f as unknown as Partial<TemplateField>
+    const code = f.code ?? alt.field_code
+    const name = f.name ?? alt.field_name
+    if (code) map[code] = name || code
   }
   fieldNameMap.value = map
 }
 
 function labelOf(key: string): string {
   return fieldNameMap.value[key] || key
+}
+
+/** 选择目标病例：picker 下标 → caseId */
+function onCaseChange(e: { detail: { value: number } }) {
+  caseId.value = cases.value[e.detail.value].id
 }
 
 function chooseImage() {
@@ -127,7 +136,7 @@ async function handleFill() {
       <picker
         :range="cases"
         range-key="case_no"
-        @change="(e) => { caseId = cases[e.detail.value].id }"
+        @change="onCaseChange"
       >
         <view class="picker-box" :class="{ empty: !caseId }">
           {{ cases.find((c) => c.id === caseId)?.case_no || '请选择病例（草稿/驳回可回填）' }}

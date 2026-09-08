@@ -10,8 +10,8 @@
 import { defineManifestConfig } from '@uni-helper/vite-plugin-uni-manifest'
 
 export default defineManifestConfig({
-  'name': 'wot-starter',
-  'appid': '__UNI__1208592',
+  'name': '智慧胸痛管理',
+  'appid': '__UNI__17F453C',
   'description': '',
   'versionName': '1.0.0',
   'versionCode': '100',
@@ -28,7 +28,14 @@ export default defineManifestConfig({
       delay: 0,
     },
     /* 模块配置 */
-    modules: {},
+    modules: {
+      Maps: {
+        description: '地图',
+      },
+      Geolocation: {
+        description: '定位',
+      },
+    },
     /* 应用发布信息 */
     distribute: {
       /* android打包配置 */
@@ -49,12 +56,21 @@ export default defineManifestConfig({
           '<uses-permission android:name="android.permission.FLASHLIGHT"/>',
           '<uses-feature android:name="android.hardware.camera"/>',
           '<uses-permission android:name="android.permission.WRITE_SETTINGS"/>',
+          '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>',
+          '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>',
         ],
+        packagename: 'com.cpx.xiongtong',
       },
       /* ios打包配置 */
       ios: {},
       /* SDK配置 */
-      sdkConfigs: {},
+      sdkConfigs: {
+        maps: {
+          amap: {
+            appkey_android: '3c2567a679ca628a8f0f5d74934241f4',
+          },
+        },
+      },
     },
   },
   /* 快应用特有相关 */

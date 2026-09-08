@@ -1,11 +1,15 @@
 <!-- 数据直报：病例编辑（模板驱动的动态表单，分类与字段由 caseDetail.fields 提供） -->
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import DoctorAPI, { type TemplateField, type EcgConsultItem } from '@/api/module_cpx/doctor'
 import { useUserStore } from '@/store/userStore'
 import { http, getApiBaseUrl } from '@/http'
 import { safeBack } from '@/utils/back'
+import {
+  useOfflineSync, flushQueue, enqueueSave, enqueueSubmit, isNetworkError,
+  writeSnapshot, readSnapshot, clearSnapshot, cacheTpl, readTplCache,
+} from '@/composables/useOfflineSync'
 
 definePage({
   name: 'case-fill',
@@ -32,6 +36,8 @@ function imgSrc(url: unknown) {
 
 /** 上传图片（拍照/相册 → 后端 → 返回 URL 写入 form_data） */
 function uploadImage(f: TemplateField) {
+  if (!ensureOnline('图片上传'))
+    return
   uni.chooseImage({
     count: 1,
     success: (res) => {
@@ -71,6 +77,59 @@ const templateName = ref<string>('')
 const activeTab = ref('')
 const caseInfo = ref<{ case_no?: string; patient_name?: string; status?: string; audit_records?: any[] }>({})
 const formData = reactive<Record<string, unknown>>({})
+
+// ── 离线同步状态（全局单例，App.vue 已挂网络监听） ──
+const { networkOnline, pendingCount, queue } = useOfflineSync()
+
+// ── 分步填报（向导）状态 ──
+const stepIndex = ref(0)
+const dirty = ref(false) // 是否有未保存的本地修改（切步/提交前即时保存的依据）
+const isFirstStep = computed(() => stepIndex.value <= 0)
+const isLastStep = computed(() => stepIndex.value >= tabs.value.length - 1)
+
+/** 步骤 → 激活分类（activeTab）+ 回顶 */
+function syncTabFromStep() {
+  const t = tabs.value[stepIndex.value]
+  if (!t)
+    return
+  activeTab.value = t.key
+  try {
+    uni.pageScrollTo({ scrollTop: 0, duration: 200 })
+  }
+  catch {
+    /* ignore */
+  }
+}
+function goPrev() {
+  if (stepIndex.value > 0) {
+    stepIndex.value--
+    syncTabFromStep()
+    flushDirtyOnStep()
+  }
+}
+function goNext() {
+  if (stepIndex.value < tabs.value.length - 1) {
+    stepIndex.value++
+    syncTabFromStep()
+    flushDirtyOnStep()
+  }
+}
+/** 切步缺口补保存：若本步有未保存修改，清防抖计时器立即保存一次 */
+function flushDirtyOnStep() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+  if (dirty.value)
+    void runSave(true)
+}
+/** 离线中禁止的联网操作守卫（图片上传 / 定位 / 导入远程心电 / AI 识别） */
+function ensureOnline(action: string): boolean {
+  if (networkOnline.value)
+    return true
+  uni.showToast({ title: `当前离线，${action}需联网后操作`, icon: 'none' })
+  return false
+}
 
 /** 本病例关联的远程心电记录（用于与数据直报「接收远程心电图」保持一致） */
 const ecgRecords = ref<EcgConsultItem[]>([])
@@ -155,13 +214,56 @@ onLoad(async (query) => {
     const ecgImg = latestRemoteEcgImage()
     if (hasRemoteField && ecgImg)
       formData['remote_ecg_receive'] = ecgImg
-    // 默认激活第一个分类
+    // 默认激活第一个分类 / 分步定位第 1 步
+    stepIndex.value = 0
     if (tabs.value.length)
       activeTab.value = tabs.value[0].key
+    // 缓存模板字段定义（供离线渲染动态表单），并清掉该病例已同步完成的本地快照残留（仍在队列中的保留）
+    cacheTpl({ templateId: templateId.value, templateName: templateName.value, fields: [...tplFields.value] })
+    const snap = readSnapshot(caseId.value)
+    const selfPending = !!snap && queue.value.some((o) => o.caseId === caseId.value)
+    if (snap && !selfPending)
+      clearSnapshot(caseId.value)
+    // 进入页面且在线：若全局遗留离线队列（此前在其他页面/断网期间的保存），尝试触发同步
+    if (pendingCount.value > 0)
+      void flushQueue()
+  }
+  catch (err) {
+    // 网络不可达 → 离线兜底：模板字段缓存 + 本地快照回填继续编辑（数据不丢）
+    if (isNetworkError(err)) {
+      const snap = readSnapshot(caseId.value)
+      const tpl = snap ? readTplCache(snap.templateId) : null
+      if (snap && tpl) {
+        templateId.value = snap.templateId
+        templateName.value = snap.templateName || tpl.templateName
+        tplFields.value = tpl.fields || []
+        caseInfo.value = {
+          case_no: snap.caseNo,
+          patient_name: snap.patientName || '离线数据',
+          status: snap.status || 'draft',
+          audit_records: [],
+        }
+        Object.keys(snap.formData || {}).forEach((k) => {
+          formData[k] = snap.formData[k]
+        })
+        stepIndex.value = 0
+        if (tabs.value.length)
+          activeTab.value = tabs.value[0].key
+        networkOnline.value = false
+        uni.showToast({ title: '当前离线，已载入本地未同步数据', icon: 'none' })
+      }
+    }
+    // 非网络错误（如病例不存在）：交由 http 层提示，页面保持原空态
   }
   finally {
     loading.value = false
   }
+})
+
+// 进入页面即尝试同步一次遗留离线队列（网络恢复/上次未同步完的场景）
+onShow(() => {
+  if (pendingCount.value > 0)
+    void flushQueue()
 })
 
 // ── 自动保存（防抖 3s） ──────────────────────────────
@@ -169,16 +271,83 @@ let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 watch(formData, () => {
   if (!caseId.value || loading.value || !templateId.value)
     return
+  dirty.value = true
   if (autoSaveTimer)
     clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(() => {
-    const s = caseInfo.value.status
-    if (s !== 'draft' && s !== 'rejected')
-      return
-    DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...formData } })
-      .catch(() => { /* 静默失败，下次变化重试 */ })
+    autoSaveTimer = null
+    void runSave(true)
   }, 3000)
 }, { deep: true })
+
+// ── 统一保存入口：在线走后端，离线入本地队列 + 快照 ──
+function saveLocal(silent: boolean) {
+  enqueueSave(caseId.value, templateId.value, { ...formData })
+  writeSnapshot(caseId.value, {
+    caseId: caseId.value,
+    templateId: templateId.value,
+    templateName: templateName.value,
+    status: caseInfo.value.status,
+    caseNo: caseInfo.value.case_no,
+    patientName: caseInfo.value.patient_name,
+    formData: { ...formData },
+    ts: Date.now(),
+  })
+  cacheTpl({ templateId: templateId.value, templateName: templateName.value, fields: [...tplFields.value] })
+  dirty.value = false
+  if (!silent)
+    uni.showToast({ title: '已离线保存，联网后自动同步', icon: 'none' })
+}
+
+/** silent=true：自动保存/切步补保存，不打扰提示 */
+async function runSave(silent = false) {
+  if (!templateId.value || !caseId.value)
+    return
+  const s = caseInfo.value.status
+  if (s !== 'draft' && s !== 'rejected') {
+    dirty.value = false
+    return
+  }
+  if (networkOnline.value) {
+    try {
+      await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...formData } })
+      dirty.value = false
+      if (!silent)
+        uni.showToast({ title: '草稿已保存', icon: 'success' })
+    }
+    catch (err) {
+      if (isNetworkError(err)) {
+        // 探测在线但请求网络失败（刚断网）→ 转离线队列
+        networkOnline.value = false
+        saveLocal(silent)
+      }
+      else if (!silent) {
+        /* 业务错误：http 层已 toast */
+      }
+    }
+  }
+  else {
+    saveLocal(silent)
+  }
+}
+
+/** 离线提交：队列写为 [最后一次 save, submit]，本地快照留底 */
+function submitLocal() {
+  enqueueSubmit(caseId.value, templateId.value, { ...formData })
+  writeSnapshot(caseId.value, {
+    caseId: caseId.value,
+    templateId: templateId.value,
+    templateName: templateName.value,
+    status: caseInfo.value.status,
+    caseNo: caseInfo.value.case_no,
+    patientName: caseInfo.value.patient_name,
+    formData: { ...formData },
+    ts: Date.now(),
+  })
+  cacheTpl({ templateId: templateId.value, templateName: templateName.value, fields: [...tplFields.value] })
+  dirty.value = false
+  uni.showToast({ title: '已离线提交，联网后自动同步', icon: 'none' })
+}
 
 // ── 字段渲染辅助 ──────────────────────────────────────
 
@@ -242,6 +411,8 @@ function ipLocate(f: TemplateField) {
 
 /** 发病地址定位：H5 优先浏览器原生定位，失败自动降级 IP 定位（保证局域网 IP 访问也能用）；App/小程序用地图选择 */
 function locateAddress(f: TemplateField) {
+  if (!ensureOnline('定位'))
+    return
   // #ifdef H5
   // H5：uni.chooseLocation 依赖地图 key 且需 https，直接用浏览器原生定位；
   // 非安全上下文（局域网 IP / 非 https）会被浏览器拒绝 → 自动降级 IP 定位，不再让用户手动输入
@@ -304,10 +475,8 @@ async function handleSave() {
   }
   saving.value = true
   try {
-    await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...formData } })
-    uni.showToast({ title: '草稿已保存', icon: 'success' })
+    await runSave(false)
   }
-  catch { /* toast by http */ }
   finally { saving.value = false }
 }
 
@@ -317,16 +486,35 @@ async function handleSubmit() {
     uni.showToast({ title: '当前状态不可编辑，仅草稿/驳回可修改', icon: 'none' })
     return
   }
+  // 离线提交：写本地队列 [save+submit]，联网后自动完成
+  if (!networkOnline.value) {
+    submitLocal()
+    return
+  }
   submitting.value = true
   try {
-    await DoctorAPI.saveForm(caseId.value, { template_id: templateId.value, form_data: { ...formData } })
+    // 先静默保存最新内容（网络失败会内部转离线并置 networkOnline=false）
+    await runSave(true)
+    if (!networkOnline.value) {
+      // 保存阶段恰好断网 → 转离线提交
+      submitLocal()
+      return
+    }
     await DoctorAPI.submitCase(caseId.value)
     // 立即同步状态，避免残留的自动保存定时器带着旧状态（draft）再去存导致 400/500
     caseInfo.value = { ...caseInfo.value, status: 'submitted' }
+    dirty.value = false
     uni.showToast({ title: '提交成功，已进入审核', icon: 'success' })
     setTimeout(() => safeBack(), 800)
   }
-  catch { /* toast by http */ }
+  catch (err) {
+    if (isNetworkError(err)) {
+      // submit 请求本身网络失败（如提交瞬间断网）→ 转离线提交，不丢数据
+      networkOnline.value = false
+      submitLocal()
+    }
+    /* 业务错误：http 层已 toast */
+  }
   finally { submitting.value = false }
 }
 
@@ -358,6 +546,8 @@ function uploadToServer(filePath: string, onSuccess: (url: string) => void) {
 
 /** 证件识别（拍照/选择图片 → 上传 → 自动填入当前 Tab 的图片字段） */
 function idCardEntry() {
+  if (!ensureOnline('证件识别'))
+    return
   uni.showActionSheet({
     itemList: ['拍照', '从相册选择'],
     success: (res) => {
@@ -385,6 +575,8 @@ function idCardEntry() {
 
 /** 导入远程心电图：合诊患者（已关联远程心电记录）自动填入图片；非合诊患者提示但仍可手动填 */
 function importRemoteEcg() {
+  if (!ensureOnline('导入远程心电图'))
+    return
   const img = latestRemoteEcgImage()
   if (img) {
     formData['remote_ecg_receive'] = img
@@ -401,6 +593,8 @@ function importRemoteEcg() {
 
 /** AI 智能识别：图片识别（调用后端通义千问 Vision）/ 语音识别（Web Speech API + 后端解析） */
 function aiEntry() {
+  if (!ensureOnline('AI 识别'))
+    return
   uni.showActionSheet({
     itemList: ['图片识别', '语音识别'],
     success: (res) => {
@@ -585,18 +779,18 @@ function fillFormData(info: Record<string, string>) {
         </view>
       </view>
 
-      <!-- Tab 切换 -->
-      <scroll-view v-if="tabs.length" scroll-x class="tab-bar">
-        <view
-          v-for="t in tabs"
-          :key="t.key"
-          class="tab-item"
-          :class="{ active: activeTab === t.key }"
-          @click="activeTab = t.key"
-        >
-          {{ t.name }}
-        </view>
-      </scroll-view>
+      <!-- 离线/待同步提示条 -->
+      <view v-if="!networkOnline || pendingCount > 0" class="offline-bar" :class="{ syncing: networkOnline }">
+        <text v-if="!networkOnline">📡 离线中{{ pendingCount ? ` · ${pendingCount} 条待同步，联网后自动同步` : ' · 仅可本地编辑' }}</text>
+        <text v-else>↻ 正在同步离线数据…</text>
+      </view>
+
+      <!-- 分步向导步骤条（步骤 = 模板分组，仅展示；前进靠「上一步 / 下一步」） -->
+      <view v-if="tabs.length" class="steps-wrap">
+        <wd-steps :active="stepIndex" align-center custom-class="fill-steps">
+          <wd-step v-for="t in tabs" :key="t.key" :title="t.name" />
+        </wd-steps>
+      </view>
       <view v-else class="no-tpl-tip">该病例模板未配置字段</view>
 
       <!-- 字段表单 -->
@@ -709,10 +903,12 @@ function fillFormData(info: Record<string, string>) {
         <view v-if="!currentFields.length" class="empty">该分类暂无字段</view>
       </view>
 
-      <!-- 操作 -->
+      <!-- 操作：向导导航（上一步）+ 常驻保存草稿 + 主操作（下一步 / 提交审核，最右） -->
       <view v-if="tabs.length" class="ops">
-        <button class="op-btn op-save" :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存草稿' }}</button>
-        <button class="op-btn op-submit" :disabled="submitting" @click="handleSubmit">{{ submitting ? '提交中...' : '提交审核' }}</button>
+        <button v-if="!isFirstStep" class="op-btn op-prev" :disabled="submitting" @click="goPrev">上一步</button>
+        <button class="op-btn op-save" :disabled="saving || submitting" @click="handleSave">{{ saving ? '保存中...' : '保存草稿' }}</button>
+        <button v-if="!isLastStep" class="op-btn op-next" :disabled="submitting" @click="goNext">下一步</button>
+        <button v-if="isLastStep" class="op-btn op-submit" :disabled="submitting" @click="handleSubmit">{{ submitting ? '提交中...' : '提交审核' }}</button>
       </view>
     </template>
 
@@ -786,22 +982,31 @@ function fillFormData(info: Record<string, string>) {
 .tip-title { font-size: 28rpx; font-weight: 600; color: #dc2626; }
 .tip-item { margin-top: 12rpx; font-size: 26rpx; color: #b91c1c; }
 
-.tab-bar {
-  white-space: nowrap;
+.offline-bar {
+  margin: 0 32rpx 20rpx;
+  padding: 16rpx 24rpx;
+  border-radius: 14rpx;
+  background: #fef2f2;
+  border: 2rpx solid #fecaca;
+  font-size: 24rpx;
+  color: #dc2626;
+  text-align: center;
+}
+.offline-bar.syncing {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.steps-wrap {
+  padding: 20rpx 32rpx 8rpx;
   background: #ffffff;
-  padding: 16rpx 32rpx;
   border-bottom: 2rpx solid #f0f1f3;
 }
-.tab-item {
-  display: inline-block;
-  padding: 12rpx 28rpx;
-  margin-right: 12rpx;
-  border-radius: 32rpx;
-  font-size: 26rpx;
-  color: #6b7280;
-  background: #f3f4f6;
+/* wd-steps 默认字号在步骤多时偏大，收紧 title */
+:deep(.wd-step__title) {
+  font-size: 22rpx !important;
 }
-.tab-item.active { background: #2563eb; color: #ffffff; }
 
 .form-card {
   margin: 24rpx 32rpx;
@@ -941,18 +1146,21 @@ function fillFormData(info: Record<string, string>) {
 
 .ops {
   display: flex;
-  gap: 24rpx;
+  gap: 16rpx;
   margin: 8rpx 32rpx 0;
 }
 .op-btn {
   flex: 1;
-  height: 100rpx;
-  line-height: 100rpx;
-  border-radius: 24rpx;
-  font-size: 32rpx;
+  height: 96rpx;
+  line-height: 96rpx;
+  border-radius: 20rpx;
+  font-size: 30rpx;
   font-weight: 600;
   border: none;
 }
 .op-save { background: #ffffff; color: #1d4ed8; border: 2rpx solid #1d4ed8; }
+.op-prev { background: #f3f4f6; color: #4b5563; }
+.op-next { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; }
 .op-submit { background: #1d4ed8; color: #ffffff; }
+.op-btn[disabled] { opacity: 0.6; }
 </style>

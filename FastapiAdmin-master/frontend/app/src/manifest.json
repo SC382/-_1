@@ -1,6 +1,6 @@
 {
-  "name": "wot-starter",
-  "appid": "__UNI__1208592",
+  "name": "智慧胸痛管理",
+  "appid": "__UNI__17F453C",
   "description": "",
   "versionName": "1.0.0",
   "versionCode": "100",
@@ -16,7 +16,12 @@
       "delay": 0
     },
     "modules": {
-      "Record": {}
+      "Maps": {
+        "description": "地图"
+      },
+      "Geolocation": {
+        "description": "定位"
+      }
     },
     "distribute": {
       "android": {
@@ -36,15 +41,19 @@
           "<uses-permission android:name=\"android.permission.FLASHLIGHT\"/>",
           "<uses-feature android:name=\"android.hardware.camera\"/>",
           "<uses-permission android:name=\"android.permission.WRITE_SETTINGS\"/>",
-          "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>"
-        ]
+          "<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>",
+          "<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>"
+        ],
+        "packagename": "com.cpx.xiongtong"
       },
-      "ios": {
-        "privacyDescription": {
-          "NSMicrophoneUsageDescription": "用于语音录入病例信息"
+      "ios": {},
+      "sdkConfigs": {
+        "maps": {
+          "amap": {
+            "appkey_android": "3c2567a679ca628a8f0f5d74934241f4"
+          }
         }
-      },
-      "sdkConfigs": {}
+      }
     }
   },
   "app-harmony": {

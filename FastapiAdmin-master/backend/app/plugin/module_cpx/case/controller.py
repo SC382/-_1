@@ -524,6 +524,17 @@ async def get_case_analysis_controller(
     return SuccessResponse(data=result, msg="获取病例分析成功")
 
 
+@CaseRouter.get("/followup/{id}", summary="病例随访记录详情")
+async def get_case_followup_controller(
+    auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_ADMIN]))],
+    id: Annotated[int, Path(description="病例ID")],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    service = CaseService(auth, db)
+    result = await service.followup(id=id)
+    return SuccessResponse(data=result, msg="获取随访记录成功")
+
+
 @CaseRouter.post("/create", summary="新增病例（测试/联调）")
 async def create_case_controller(
     auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_ADMIN]))],

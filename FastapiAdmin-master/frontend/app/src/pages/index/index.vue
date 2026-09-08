@@ -8,13 +8,8 @@ import { AnnouncementAPI, type AnnouncementItem } from '@/api/module_cpx/announc
 import { ValueAddedAPI, type ValueAddedItem } from '@/api/module_cpx/value_added'
 import homeBg from '@/static/images/home_bg.jpg'
 
-// 顶部渐变 + banner 图叠加（multiply 混合压暗保证白字可读）
-const headerBgStyle = {
-  backgroundImage: `linear-gradient(135deg, #0ea5e9 0%, #2563eb 55%, #059669 100%), url('${homeBg}')`,
-  backgroundSize: 'cover',
-  backgroundPosition: 'center center',
-  backgroundBlendMode: 'multiply',
-}
+// 顶部完整横幅图（image widthFix 按原图 850×480 比例完整显示，图上文字永不裁切）
+// homeBg import 见上方，供 <image class="header-bg"> 使用
 
 definePage({
   name: 'home',
@@ -143,8 +138,9 @@ function goStatCase(status: string) {
 
 <template>
   <view class="doctor-home">
-    <!-- 顶部 banner：背景图 + 顶端标题 + 退出 + 图内下方统计卡 -->
-    <view class="home-header" :style="headerBgStyle">
+    <!-- 顶部 banner：完整横幅图（widthFix 按比例全图显示）+ 图上装饰 + 图内下方统计卡 -->
+    <view class="home-header">
+      <image class="header-bg" :src="homeBg" mode="widthFix" />
       <view class="header-deco deco-1" />
       <view class="header-deco deco-2">♥</view>
 
@@ -242,14 +238,27 @@ function goStatCase(status: string) {
 
 .home-header {
   position: relative;
-  padding: 32rpx 32rpx 28rpx;
-  min-height: 300rpx;
-  overflow: hidden;
+  /* 全宽横幅带：背景取图边缘实测蓝做垂直渐变（顶 #145CB3 → 底 #4B71F3，与图内垂直渐变同向），
+     桌面宽屏下图限宽居中后，两侧由同色系渐变延伸铺满 → 横幅视觉横贯整屏、无灰底；
+     图片本身完整不裁、不变形 */
+  background: linear-gradient(180deg, #145cb3 0%, #4b71f3 100%);
+}
+/* 完整横幅图：等比完整显示；限宽 640px 居中（桌面高度≈421px = 640×494/750），
+   手机窄屏（<640px）不受限仍铺满全宽，观感不变 */
+.header-bg {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  display: block;
+  position: relative;
+  z-index: 0;
 }
 .header-deco {
   position: absolute;
   opacity: 0.15;
   color: #ffffff;
+  z-index: 1;
+  pointer-events: none;
 }
 .deco-1 {
   width: 140rpx;
@@ -285,12 +294,13 @@ function goStatCase(status: string) {
   font-size: 24rpx;
 }
 
-/* 统计卡：图片内部下方（无底纯数字叠图） */
+/* 统计卡：叠在完整横幅图内部下方（无底纯数字叠图） */
 .stat-card {
   position: absolute;
   left: 32rpx;
   right: 32rpx;
   bottom: 16rpx;
+  z-index: 1;
   display: flex;
   justify-content: space-between;
   padding: 0 12rpx;

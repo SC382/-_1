@@ -1,16 +1,18 @@
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import asynccontextmanager
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .common.enums import EnvironmentEnum
 from .config import path_conf
 from .config.setting import settings
 from .core.exceptions import handle_exception
 from .core.logger import logger
+from .core.signed_url import normalize_static_path, verify_static_signature
 from .utils.common_util import import_module
 from .utils.console import console_end, console_start
 
@@ -93,13 +95,35 @@ def register_routers(app: FastAPI) -> None:
 
 
 def register_static(app: FastAPI) -> None:
-    """注册静态文件路由。"""
+    """注册静态文件路由（签名鉴权版）。
+
+    安全加固：/static 目录下存放患者照片、心电图、病历 PDF 等隐私文件，
+    不再使用无鉴权的 StaticFiles 挂载（任何人拿到 URL 即可下载），
+    改为校验 URL 签名（exp + sign），校验通过才返回文件，否则 403。
+    """
     path_conf.STATIC_DIR.mkdir(parents=True, exist_ok=True)
-    app.mount(path=settings.STATIC_URL, app=StaticFiles(directory=path_conf.STATIC_DIR), name=path_conf.STATIC_DIR.name)
+
+    @app.get(f"{settings.STATIC_URL}/{{file_path:path}}", include_in_schema=False)
+    async def signed_static_file(file_path: str, exp: int = 0, sign: str = ""):
+        rel_path = normalize_static_path(file_path)
+        if not verify_static_signature(rel_path, exp, sign):
+            logger.warning("静态资源签名校验失败（无权限或链接已过期）: {}", rel_path)
+            raise HTTPException(status_code=403, detail="无访问权限或链接已过期")
+        # 目录穿越防护：解析后的真实路径必须仍在 STATIC_DIR 之内
+        try:
+            target = (path_conf.STATIC_DIR / rel_path).resolve()
+        except Exception:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        if not str(target).startswith(str(path_conf.STATIC_DIR.resolve())) or not target.is_file():
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return FileResponse(target)
 
 
 def register_docs(app: FastAPI) -> None:
-    """注册文档路由。"""
+    """注册文档路由（生产环境关闭，避免暴露全部 API 结构）。"""
+    if settings.ENVIRONMENT == EnvironmentEnum.PROD:
+        return
+
     swagger_ui_redirect_url = str(app.swagger_ui_oauth2_redirect_url)
     root_openapi_url = str(app.root_path) + str(app.openapi_url)
 

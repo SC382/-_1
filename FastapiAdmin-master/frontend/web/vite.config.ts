@@ -25,7 +25,7 @@ const __APP_INFO__ = {
 export default ({ mode }: { mode: string }) => {
   const root = process.cwd();
   const env = loadEnv(mode, root);
-  const isProduction = mode === "prod";
+  const isProduction = mode === "production";
 
   return defineConfig({
     define: {

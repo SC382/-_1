@@ -104,21 +104,15 @@ const fastEnterConfig: FastEnterConfig = {
       routeName: "Login",
     },
     {
-      name: "礼花效果",
-      enabled: true,
-      order: 4,
-      isDialog: true,
-    },
-    {
       name: "操作日志",
       enabled: true,
-      order: 5,
+      order: 4,
       routeName: "Log",
     },
     {
       name: "个人中心",
       enabled: true,
-      order: 6,
+      order: 5,
       routeName: "FastlinkProfile",
     },
   ],

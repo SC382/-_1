@@ -8,7 +8,6 @@ import AppConfig from "@/config";
 
 import { mittBus, StorageConfig } from "@utils";
 import { useTheme } from "@/hooks/core/useTheme";
-import { useCeremony } from "@/hooks/core/useCeremony";
 import { useSettingsState } from "./useSettingsState";
 import { useSettingsHandlers } from "./useSettingsHandlers";
 
@@ -20,7 +19,6 @@ export function useSettingsPanel() {
   const { systemThemeType, systemThemeMode, menuType } = storeToRefs(settingStore);
 
   // Composables
-  const { openFestival, cleanup } = useCeremony();
   const { setSystemTheme, setSystemAutoTheme } = useTheme();
   const { initColorWeak } = useSettingsState();
   const { domOperations } = useSettingsHandlers();
@@ -205,14 +203,12 @@ export function useSettingsPanel() {
       domOperations.setRootAttribute("data-box-mode", boxMode);
 
       themeHandlers.initSystemTheme();
-      openFestival();
     };
 
     const cleanupSettings = () => {
       stopWatch();
       mittBus.off("openSetting", openSetting);
       themeCleanup?.();
-      cleanup();
     };
 
     return {

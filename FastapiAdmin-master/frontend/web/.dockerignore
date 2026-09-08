@@ -1,0 +1,6 @@
+node_modules
+dist
+.git
+*.md
+# 保留 .env 与 .env.production（构建需要），仅排除开发环境文件
+.env.development

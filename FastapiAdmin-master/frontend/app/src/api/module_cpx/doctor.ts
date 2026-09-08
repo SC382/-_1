@@ -2,6 +2,7 @@
  * 医生端 API（cpx/doctor）：工作台统计 / 模板 / 病例建档 / 动态表单 / 我的病例
  */
 import { http } from '@/http'
+import { stringifyQuery } from '@/http/tools/queryString'
 
 export interface DoctorStats {
   today_new: number
@@ -247,9 +248,17 @@ export const DoctorAPI = {
   followupGroups(status?: string) {
     return http.Get<{ total: number; items: FollowUpGroup[] }>('/cpx/doctor/followup/groups', { status: status || undefined })
   },
-  /** 随访：提交 */
-  followupSubmit(id: number, body: { follow_date?: string; follow_status?: string; survival_status?: string; risk_control?: string; medication?: string; remark?: string }) {
+  /** 随访：单条详情（含患者上下文） */
+  followupDetail(id: number) {
+    return http.Get<FollowUpDetail>(`/cpx/doctor/followup/${id}`)
+  },
+  /** 随访：提交（35 字段分组表单） */
+  followupSubmit(id: number, body: FollowUpSubmitBody) {
     return http.Post(`/cpx/doctor/followup/${id}/submit`, body)
+  },
+  /** 随访：某病例的心电记录（供「心电图」联动下拉） */
+  followupEcgList(caseId: number) {
+    return http.Get<{ items: FollowUpEcgItem[] }>(`/cpx/doctor/ecg/list-by-case/${caseId}`, { cacheFor: 0 })
   },
   /** 数据概览 */
   statsOverview(months = 6) {
@@ -310,16 +319,17 @@ export const DoctorAPI = {
   meetingDelete(id: number) {
     return http.Delete(`/cpx/doctor/meeting/${id}`)
   },
-  /** 我的病例列表（支持按状态/日期筛选，手动拼 URL 参数避免 alova params 兼容问题） */
+  /** 我的病例列表（支持按状态/日期筛选；stringifyQuery 为 App 兼容实现，勿用 URLSearchParams——App 端 JS 引擎无此 Web API，会导致请求静默不发） */
   myCases(params: { status?: string; page_no?: number; page_size?: number; keyword?: string; start_time?: string; end_time?: string }) {
-    const qs = new URLSearchParams()
-    if (params.status) qs.set('status', params.status)
-    if (params.page_no) qs.set('page_no', String(params.page_no))
-    if (params.page_size) qs.set('page_size', String(params.page_size))
-    if (params.keyword) qs.set('keyword', params.keyword)
-    if (params.start_time) qs.set('start_time', params.start_time)
-    if (params.end_time) qs.set('end_time', params.end_time)
-    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    const qs = stringifyQuery({
+      status: params.status,
+      page_no: params.page_no,
+      page_size: params.page_size,
+      keyword: params.keyword,
+      start_time: params.start_time,
+      end_time: params.end_time,
+    })
+    const suffix = qs ? `?${qs}` : ''
     // cacheFor: 0 禁用缓存，确保每次切换 Tab 都发新请求
     return http.Get<{ page_no: number; page_size: number; total: number; has_next: boolean; items: CaseRecordItem[] }>(`/cpx/doctor/case/list${suffix}`, undefined, { cacheFor: 0 } as any)
   },
@@ -367,6 +377,135 @@ export interface FollowUpItem {
   risk_control?: string
   medication?: string
   remark?: string
+}
+
+/** 随访单条详情（含患者/病例上下文，供随访详情页使用） */
+export interface FollowUpDetail {
+  id: number
+  case_id: number
+  case_no?: string
+  patient_name?: string
+  gender?: string
+  age?: number
+  phone?: string
+  come_type?: string
+  diagnose_type?: string
+  inpatient_no?: string
+  discharge_date?: string
+  plan_month?: number
+  due_date?: string
+  status?: string
+  follow_date?: string
+  follow_status?: string
+  survival_status?: string
+  risk_control?: string
+  medication?: string
+  remark?: string
+  create_time?: string
+  update_time?: string
+  // ── 扩展 35 字段（基本信息）──
+  plan_date_start?: string
+  plan_date_end?: string
+  follow_dept?: string
+  follow_user?: string
+  unplanned_admission?: string
+  info_channel?: string
+  current_condition?: string
+  cardiac_rehab?: string
+  mace?: string
+  // ── 危险因素控制 ──
+  bp_monitor?: string
+  lipid_panel?: string
+  lpa?: string
+  fasting_glucose?: string
+  hba1c?: string
+  smoking?: string
+  alcohol?: string
+  height?: string
+  weight?: string
+  bmi?: string
+  // ── 躯体症状与心功能评价 ──
+  symptoms?: string
+  nyha?: string
+  // ── 心电图 ──
+  ecg_result?: string
+  ecg_image?: string
+  ecg_record_id?: number
+  // ── 检查项目 ──
+  ckmb?: string
+  troponin?: string
+  bnp?: string
+  echocardiography?: string
+  coronary_angiography?: string
+  coronary_cta?: string
+  // ── 用药情况 ──
+  med_antiplatelet?: string
+  med_lipid_lowering?: string
+  med_acei?: string
+  med_arb?: string
+  med_arni?: string
+  med_beta_blocker?: string
+  med_hypoglycemic?: string
+  med_anticoagulant?: string
+  med_diuretic?: string
+}
+
+/** 随访提交体（35 字段分组；核心必填由后端按是否已随访校验） */
+export interface FollowUpSubmitBody {
+  follow_date?: string
+  follow_status?: string
+  survival_status?: string
+  plan_date_start?: string
+  plan_date_end?: string
+  follow_dept?: string
+  follow_user?: string
+  unplanned_admission?: string
+  info_channel?: string
+  current_condition?: string
+  cardiac_rehab?: string
+  mace?: string
+  bp_monitor?: string
+  lipid_panel?: string
+  lpa?: string
+  fasting_glucose?: string
+  hba1c?: string
+  smoking?: string
+  alcohol?: string
+  height?: string
+  weight?: string
+  bmi?: string
+  symptoms?: string
+  nyha?: string
+  ecg_result?: string
+  ecg_image?: string
+  ecg_record_id?: number
+  ckmb?: string
+  troponin?: string
+  bnp?: string
+  echocardiography?: string
+  coronary_angiography?: string
+  coronary_cta?: string
+  med_antiplatelet?: string
+  med_lipid_lowering?: string
+  med_acei?: string
+  med_arb?: string
+  med_arni?: string
+  med_beta_blocker?: string
+  med_hypoglycemic?: string
+  med_anticoagulant?: string
+  med_diuretic?: string
+  risk_control?: string
+  medication?: string
+  remark?: string
+}
+
+/** 随访心电图联动项 */
+export interface FollowUpEcgItem {
+  id: number
+  image_path?: string
+  status?: string
+  ai_summary?: string
+  create_time?: string
 }
 
 /** 随访子项（某患者的单个月份随访任务） */

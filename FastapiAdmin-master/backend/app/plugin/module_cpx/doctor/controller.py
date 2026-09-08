@@ -350,6 +350,16 @@ async def followup_groups_controller(
     return SuccessResponse(data=result, msg="查询随访分组成功")
 
 
+@DoctorRouter.get("/followup/{id}", summary="随访单条详情（含患者上下文）")
+async def followup_detail_controller(
+    auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_DOCTOR]))],
+    id: Annotated[int, Path(description="随访ID")],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    result = await DoctorService(auth, db).followup_detail(id=id)
+    return SuccessResponse(data=result, msg="查询随访详情成功")
+
+
 @DoctorRouter.post("/followup/{id}/submit", summary="提交随访表单")
 async def followup_submit_controller(
     auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_DOCTOR]))],
@@ -417,6 +427,19 @@ async def ecg_list_controller(
     request: Request,
 ) -> JSONResponse:
     result = await DoctorService(auth, db).ecg_list()
+    for it in (result.get("items") or []):
+        it["image_path"] = _to_abs_url(request, it.get("image_path"))
+    return SuccessResponse(data=result, msg="查询心电记录成功")
+
+
+@DoctorRouter.get("/ecg/list-by-case/{case_id}", summary="某病例心电记录列表（供随访心电图联动）")
+async def ecg_list_by_case_controller(
+    auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_DOCTOR]))],
+    case_id: Annotated[int, Path(description="病例ID")],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    request: Request,
+) -> JSONResponse:
+    result = await DoctorService(auth, db).ecg_list_by_case(case_id=case_id)
     for it in (result.get("items") or []):
         it["image_path"] = _to_abs_url(request, it.get("image_path"))
     return SuccessResponse(data=result, msg="查询心电记录成功")

@@ -13,6 +13,7 @@ from sqlalchemy import JSON, BigInteger, Date, DateTime, ForeignKey, SmallIntege
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.base_model import MappedBase
+from app.core.crypto import EncryptedJson, EncryptedString
 
 
 class HospitalModel(MappedBase):
@@ -109,15 +110,15 @@ class CaseRecordModel(MappedBase):
     patient_name: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="患者姓名")
     gender: Mapped[str | None] = mapped_column(String(10), nullable=True, comment="性别")
     age: Mapped[int | None] = mapped_column(nullable=True, comment="年龄")
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="联系电话")
+    phone: Mapped[str | None] = mapped_column(EncryptedString(255), nullable=True, comment="联系电话")
     first_contact_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="首次医疗接触时间")
     id_type: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="证件类型 身份证/社保卡/其他")
-    id_number: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="证件号码")
+    id_number: Mapped[str | None] = mapped_column(EncryptedString(255), nullable=True, comment="证件号码")
     birth_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="出生日期")
     onset_address: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="发病地址")
     detail_address: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="详细地址")
     insurance_type: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="医保类型")
-    insurance_no: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="医保编号")
+    insurance_no: Mapped[str | None] = mapped_column(EncryptedString(255), nullable=True, comment="医保编号")
     come_type: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="来院方式 120/自行/转诊")
     diagnose_type: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="诊断类型 STEMI/NSTEMI/UA/主动脉夹层/肺栓塞/低危胸痛")
     status: Mapped[str | None] = mapped_column(String(20), nullable=True, default="draft", comment="draft草稿 submitted待审核 approved通过 rejected驳回")
@@ -138,7 +139,7 @@ class CaseDetailModel(MappedBase):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     case_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("case_record.id"), nullable=False, comment="病例ID")
     template_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("report_template.id"), nullable=False, comment="模板ID")
-    form_data: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="动态表单数据")
+    form_data: Mapped[dict | None] = mapped_column(EncryptedJson, nullable=True, comment="动态表单数据")
     create_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.now, comment="创建时间")
     update_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now, comment="更新时间")
 
@@ -218,6 +219,7 @@ class FollowUpModel(MappedBase):
     risk_control: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="危险因素控制")
     medication: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="用药情况")
     remark: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="备注")
+    form_data: Mapped[str | None] = mapped_column(Text, nullable=True, comment="随访表单扩展数据 JSON（分组字段）")
     create_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.now, comment="创建时间")
     update_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now, comment="更新时间")
 

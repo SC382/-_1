@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """病例管理服务"""
 
+import json
 import random
 from datetime import date, datetime
 
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import CustomException
 from app.config.setting import settings
+from app.core.signed_url import sign_static_url
 
 from app.plugin.module_cpx.auth.dependencies import BizAuth
 from app.plugin.module_cpx.case.schema import CaseCreateSchema
@@ -24,6 +26,7 @@ from app.plugin.module_cpx.models import (
     EcgConsultModel,
     FollowUpModel,
     MeetingRecordModel,
+    UserAccountModel,
 )
 
 
@@ -33,8 +36,8 @@ def _cpx_abs_static_url(path: str | None) -> str | None:
         return None
     p = path.lstrip("/")
     if p.startswith("api/v1/") or p.startswith("http://") or p.startswith("https://"):
-        return "/" + p
-    return f"{settings.ROOT_PATH}{settings.STATIC_URL}/{p}"
+        return sign_static_url("/" + p)
+    return sign_static_url(f"{settings.ROOT_PATH}{settings.STATIC_URL}/{p}")
 
 
 def _cpx_parse_time(value) -> datetime | None:
@@ -441,6 +444,59 @@ class CaseService:
             "diagnose_type": case.diagnose_type,
             "items": items,
             "missing_required": missing,
+        }
+
+    async def followup(self, *, id: int) -> dict:
+        """病例随访记录详情（管理员可查看任意病例的随访，按随访计划月、应随访日期排序）。"""
+        case = await self.db.get(CaseRecordModel, id)
+        if not case:
+            raise CustomException(msg="病例不存在")
+        rows = (
+            await self.db.execute(
+                select(FollowUpModel, UserAccountModel.real_name)
+                .outerjoin(UserAccountModel, UserAccountModel.id == FollowUpModel.doctor_id)
+                .where(FollowUpModel.case_id == id)
+                .order_by(FollowUpModel.plan_month, FollowUpModel.due_date)
+            )
+        ).all()
+        items = []
+        for fu, doctor_name in rows:
+            # App 端完整随访表单（form_data JSON 展开；空/损坏 → None）
+            ext_data = None
+            raw_data = (fu.form_data or "").strip()
+            if raw_data and raw_data != "{}":
+                try:
+                    parsed = json.loads(raw_data)
+                    if isinstance(parsed, dict):
+                        ext_data = parsed
+                except (ValueError, TypeError):
+                    ext_data = None
+            if isinstance(ext_data, dict) and ext_data.get("ecg_image"):
+                ext_data["ecg_image"] = _cpx_abs_static_url(str(ext_data["ecg_image"]))
+            items.append({
+                "id": fu.id,
+                "case_id": fu.case_id,
+                "patient_name": fu.patient_name,
+                "doctor_id": fu.doctor_id,
+                "doctor_name": doctor_name,
+                "plan_month": fu.plan_month,
+                "due_date": fu.due_date.isoformat() if fu.due_date else None,
+                "status": fu.status,
+                "follow_date": fu.follow_date.isoformat() if fu.follow_date else None,
+                "follow_status": fu.follow_status,
+                "survival_status": fu.survival_status,
+                "risk_control": fu.risk_control,
+                "medication": fu.medication,
+                "remark": fu.remark,
+                "create_time": fu.create_time.isoformat() if fu.create_time else None,
+                "update_time": fu.update_time.isoformat() if fu.update_time else None,
+                "form_data": ext_data,
+            })
+        return {
+            "case_no": case.case_no,
+            "patient_name": case.patient_name,
+            "total": len(items),
+            "items": items,
         }
 
     async def create(self, data: CaseCreateSchema) -> dict:
