@@ -168,13 +168,13 @@ function uploadToServer(filePath: string, onSuccess: (url: string) => void) {
   })
 }
 
-/** 识别前压缩（App 端）：手机原图 2-8MB → 长边 ≤1600、质量 70，上传与 AI 识别更快；压缩失败自动回退原图 */
+/** 识别前压缩（App 端）：手机原图 2-8MB → 长边 ≤1280、质量 60（满足腾讯 OCR 分辨率要求，体积更小更快）；失败自动回退原图 */
 function compressForAI(filePath: string, cb: (p: string) => void) {
   // #ifndef H5
   uni.compressImage({
     src: filePath,
-    quality: 70,
-    compressedWidth: 1600,
+    quality: 60,
+    compressedWidth: 1280,
     success: (res) => cb(res.tempFilePath || filePath),
     fail: () => cb(filePath),
   })
@@ -214,29 +214,26 @@ async function recognizeImage(url: string) {
   }
 }
 
-/** 证件 OCR（腾讯云，不走大模型）：身份证 IDCardOCR / 医保卡通用识别 → 回填；医保卡附识别文字供核对 */
-function recognizeIdCardOcr(filePath: string, cardType: string) {
-  uni.showLoading({ title: `${cardType}识别中...` })
-  compressForAI(filePath, (compressed) => {
-    uploadToServer(compressed, async (url) => {
-      try {
-        const result = await http.Post('/cpx/doctor/ai/ocr', { image_url: url, card_type: cardType }) as Record<string, string>
-        fillFromRecognized(result)
-        if (result.ocr_text) {
-          uni.showModal({
-            title: '识别文字（请核对补充）',
-            content: result.ocr_text,
-            showCancel: false,
-            confirmText: '知道了',
-          })
-        }
-      }
-      catch {
-        uni.hideLoading()
-        uni.showToast({ title: '证件识别失败，请重试', icon: 'none' })
-      }
-    })
-  })
+/** 证件 OCR 主流程（图片 URL 已就绪）：提示识别中 → 调腾讯 OCR → 回填；医保卡附识别文字供核对 */
+async function runOcrFromUrl(url: string, cardType: string) {
+  try {
+    uni.showLoading({ title: `${cardType}识别中...` })
+    const result = await http.Post('/cpx/doctor/ai/ocr', { image_url: url, card_type: cardType }) as Record<string, string>
+    uni.hideLoading()
+    fillFromRecognized(result)
+    if (result.ocr_text) {
+      uni.showModal({
+        title: '识别文字（请核对补充）',
+        content: result.ocr_text,
+        showCancel: false,
+        confirmText: '知道了',
+      })
+    }
+  }
+  catch {
+    uni.hideLoading()
+    uni.showToast({ title: '证件识别失败，请重试', icon: 'none' })
+  }
 }
 
 // #ifdef H5
@@ -276,6 +273,44 @@ function uploadFileH5(file: File, onSuccess: (url: string) => void) {
   xhr.onerror = () => { uni.hideLoading(); uni.showToast({ title: '上传失败', icon: 'none' }) }
   xhr.send(form)
 }
+/** H5 浏览器端压缩（App 用 uni.compressImage）：原图 2-8MB → 长边 ≤1280、JPEG 质量 0.6，上传提速；失败回退原图 */
+function compressFileH5(file: File, maxSide = 1280, quality = 0.6): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      try {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
+        const w = Math.max(1, Math.round(img.width * scale))
+        const h = Math.max(1, Math.round(img.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { reject(new Error('canvas 不可用')); return }
+        ctx.drawImage(img, 0, 0, w, h)
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const name = (file.name || 'photo').replace(/\.[^.]+$/, '')
+            resolve(new File([blob], `${name}.jpg`, { type: 'image/jpeg' }))
+          }
+          else reject(new Error('压缩失败'))
+        }, 'image/jpeg', quality)
+      }
+      catch (e) { reject(e as Error) }
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片读取失败')) }
+    img.src = url
+  })
+}
+/** H5 统一上传：先 canvas 压缩再传（HEIC 等压缩失败自动回退原图，不阻塞） */
+async function uploadH5Compressed(file: File, onSuccess: (url: string) => void) {
+  let f = file
+  try { f = await compressFileH5(file) }
+  catch { /* 回退原图 */ }
+  uploadFileH5(f, onSuccess)
+}
 // #endif
 
 /** 文字解析：调用后端 ai/recognize {text} 提取患者信息回填 */
@@ -302,7 +337,7 @@ function aiEntry() {
         voiceInput()
         return
       }
-      pickImageH5((file) => uploadFileH5(file, (url) => recognizeImage(url)))
+      pickImageH5((file) => uploadH5Compressed(file, (url) => recognizeImage(url)))
     },
   })
   return
@@ -331,6 +366,17 @@ function idCardEntry() {
 function chooseIdCardSource(cardType: string) {
   // 先把用户选定的证件类型显示出来，再由 OCR / 手动方式填充其余信息
   form.value.id_type = cardType
+  // #ifdef H5
+  // H5 无法直调相机 → 相册选图 → canvas 压缩 → 上传 → OCR
+  uni.showActionSheet({
+    itemList: ['从相册选择'],
+    success: () => {
+      pickImageH5((file) => uploadH5Compressed(file, (url) => runOcrFromUrl(url, cardType)))
+    },
+  })
+  return
+  // #endif
+  // #ifndef H5
   uni.showActionSheet({
     itemList: ['照片拍摄', '本地上传'],
     success: (res) => {
@@ -339,7 +385,9 @@ function chooseIdCardSource(cardType: string) {
         count: 1,
         sourceType: [sourceType],
         success: (chooseRes) => {
-          recognizeIdCardOcr(chooseRes.tempFilePaths[0], cardType)
+          compressForAI(chooseRes.tempFilePaths[0], (compressed) => {
+            uploadToServer(compressed, (url) => runOcrFromUrl(url, cardType))
+          })
         },
         fail: (err: any) => {
           const msg = (err && err.errMsg) || ''
@@ -349,6 +397,7 @@ function chooseIdCardSource(cardType: string) {
       })
     },
   })
+  // #endif
 }
 
 // ── 语音输入：App 端真实录音 → 后端 ASR 转写 → AI 解析回填；H5 无原生录音 → 文本降级 ──
