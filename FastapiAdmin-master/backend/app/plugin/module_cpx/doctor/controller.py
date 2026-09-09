@@ -22,6 +22,7 @@ from app.plugin.module_cpx.doctor.schema import (
     PasswordChangeSchema,
 )
 from app.plugin.module_cpx.doctor.service import DoctorService
+from app.plugin.module_cpx.doctor.tencent_ocr import idcard_ocr as _tencent_idcard_ocr
 from app.plugin.module_cpx.log.service import LogService, get_client_ip
 from app.plugin.module_cpx.fields import FIELDS as _CPX_FIELDS
 
@@ -612,6 +613,83 @@ async def ai_recognize_controller(
         return SuccessResponse(data=result, msg="AI 识别成功")
     except json.JSONDecodeError:
         return SuccessResponse(data={"raw_text": content}, msg="AI 返回文本（请核对）")
+
+
+@DoctorRouter.post("/ai/ocr", summary="证件 OCR 识别（腾讯云 IDCardOCR，身份证人像面）")
+async def ai_ocr_controller(
+    auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_DOCTOR]))],
+    body: Annotated[dict, Body(description='{"image_url": "图片URL", "card_type": "身份证|医保卡"}')],
+) -> JSONResponse:
+    image_url = (body.get("image_url") or "").strip()
+    card_type = (body.get("card_type") or "身份证").strip()
+    if not image_url:
+        raise CustomException(msg="请提供 image_url 参数")
+    if card_type != "身份证":
+        # 医保卡无国标版式、腾讯 OCR 无专用接口 → 引导手动填写（不假装识别）
+        raise CustomException(msg="医保卡暂无自动识别，请手动填写卡片信息")
+    secret_id = settings.TENCENT_OCR_SECRET_ID
+    secret_key = settings.TENCENT_OCR_SECRET_KEY
+    if not secret_id or not secret_key or secret_id.startswith("<请填写"):
+        raise CustomException(msg="未配置腾讯云 OCR 密钥，请联系管理员")
+    # 图片 URL → 纯 base64（data URI 剥离前缀；公网地址由本站下载兜底）
+    data_uri = _resolve_image_data_uri(image_url)
+    if data_uri.startswith("data:"):
+        image_b64 = data_uri.split(",", 1)[1]
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(data_uri)
+                r.raise_for_status()
+            import base64 as _b64
+
+            image_b64 = _b64.b64encode(r.content).decode()
+        except Exception as e:
+            raise CustomException(msg=f"图片获取失败：{e}") from e
+    try:
+        resp_body = await _tencent_idcard_ocr(
+            image_b64,
+            secret_id,
+            secret_key,
+            region=settings.TENCENT_OCR_REGION or "ap-guangzhou",
+        )
+    except httpx.HTTPError as e:
+        raise CustomException(msg=f"腾讯云 OCR 请求失败：{e}") from e
+    except RuntimeError as e:
+        raise CustomException(msg=str(e)) from e
+    name = _ocr_text(resp_body, "Name")
+    sex = _ocr_text(resp_body, "Sex")
+    birth = _ocr_text(resp_body, "Birth")
+    id_num = _ocr_text(resp_body, "IdNum")
+    out: dict = {}
+    if name:
+        out["patient_name"] = name
+    if sex:
+        out["gender"] = sex if sex in ("男", "女") else ("男" if "男" in sex else "女")
+    if birth:
+        out["birth_date"] = _birth_to_ymd(birth)
+    if id_num:
+        out["id_number"] = id_num
+    if not out:
+        raise CustomException(msg="未识别到有效身份证信息，请正对证件、光线充足、避免反光后重拍")
+    return SuccessResponse(data=out, msg="证件识别成功")
+
+
+def _ocr_text(body: dict, key: str) -> str:
+    """兼容腾讯 IDCardOCR 两种返回形态：顶层字符串（实测）或 {Content, Confidence}（文档）。"""
+    raw = body.get(key) or ""
+    if isinstance(raw, dict):
+        return ((raw.get("Content") or "").strip() or "")
+    return str(raw).strip()
+
+
+def _birth_to_ymd(value: str) -> str:
+    """把身份证出生日期转成 YYYY-MM-DD（兼容 1995年5月13日 / 1995-5-13 等）。"""
+    import re
+
+    m = re.match(r"(\d{4})\s*[年./\-]\s*(\d{1,2})\s*[月./\-]\s*(\d{1,2})", value.strip())
+    if not m:
+        return value.strip()
+    return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
 
 @DoctorRouter.post("/ai/asr", summary="AI 语音识别（智谱 GLM-ASR-2512 音频转写）")

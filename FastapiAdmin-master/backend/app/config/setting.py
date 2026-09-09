@@ -247,6 +247,11 @@ class Settings(BaseSettings):
     ZHIPU_VISION_MODEL: str = "glm-4v-flash"
     ZHIPU_ASR_MODEL: str = "glm-asr-2512"
 
+    # 腾讯云文字识别 OCR（证件识别 IDCardOCR；仅主账号密钥可调用，Region 默认 ap-guangzhou）
+    TENCENT_OCR_SECRET_ID: str = ""
+    TENCENT_OCR_SECRET_KEY: str = ""
+    TENCENT_OCR_REGION: str = "ap-guangzhou"
+
     # ================================================= #
     # ******************* 动态配置 ******************* #
     # ================================================= #

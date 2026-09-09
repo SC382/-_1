@@ -214,6 +214,23 @@ async function recognizeImage(url: string) {
   }
 }
 
+/** 身份证 OCR（腾讯云，不走大模型）：压缩 → 上传 → OCR → 回填 */
+function recognizeIdCardOcr(filePath: string) {
+  uni.showLoading({ title: '证件识别中...' })
+  compressForAI(filePath, (compressed) => {
+    uploadToServer(compressed, async (url) => {
+      try {
+        const result = await http.Post('/cpx/doctor/ai/ocr', { image_url: url, card_type: '身份证' }) as Record<string, string>
+        fillFromRecognized(result)
+      }
+      catch {
+        uni.hideLoading()
+        uni.showToast({ title: '证件识别失败，请重试', icon: 'none' })
+      }
+    })
+  })
+}
+
 // #ifdef H5
 // ── H5 专属：原生 input 选图（同步 click 保留用户激活，绕开 uni.chooseImage 在异步回调被浏览器拦截）──
 let _h5Input: HTMLInputElement | null = null
@@ -304,8 +321,12 @@ function idCardEntry() {
 }
 
 function chooseIdCardSource(cardType: string) {
-  // 先把用户选定的证件类型显示出来（"显示被是什么证件"），再由 OCR 填充其余信息
+  // 先把用户选定的证件类型显示出来，再由识别/手动方式填充其余信息
   form.value.id_type = cardType
+  if (cardType !== '身份证') {
+    uni.showToast({ title: '医保卡暂无自动识别，请手动填写卡面信息', icon: 'none', duration: 2500 })
+    return
+  }
   uni.showActionSheet({
     itemList: ['照片拍摄', '本地上传'],
     success: (res) => {
@@ -314,8 +335,7 @@ function chooseIdCardSource(cardType: string) {
         count: 1,
         sourceType: [sourceType],
         success: (chooseRes) => {
-          uni.showLoading({ title: `${cardType}识别中...` })
-          recognizeFromImage(chooseRes.tempFilePaths[0])
+          recognizeIdCardOcr(chooseRes.tempFilePaths[0])
         },
         fail: (err: any) => {
           const msg = (err && err.errMsg) || ''
