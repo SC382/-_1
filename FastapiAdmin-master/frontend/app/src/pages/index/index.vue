@@ -70,12 +70,18 @@ function goValueAdded(item: ValueAddedItem) {
     uni.navigateTo({ url: item.link_url })
     return
   }
-  // h5 / external：H5 端新窗口打开，App 端提示复制链接
+  // h5 / external：H5 端新窗口打开，App 端调起系统浏览器
   // #ifdef H5
   window.open(item.link_url, '_blank')
   // #endif
   // #ifndef H5
-  uni.setClipboardData({ data: item.link_url, success: () => uni.showToast({ title: '链接已复制', icon: 'none' }) })
+  try {
+    plus.runtime.openURL(item.link_url)
+  }
+  catch {
+    // 极少数机型无可用浏览器时，回退为复制链接
+    uni.setClipboardData({ data: item.link_url, success: () => uni.showToast({ title: '打开失败，链接已复制', icon: 'none' }) })
+  }
   // #endif
 }
 const hasValueAdded = computed(() => valueAddedList.value.length > 0)

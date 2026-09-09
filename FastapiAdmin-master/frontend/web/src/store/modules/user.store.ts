@@ -29,6 +29,7 @@ export interface LogoutOptions {
   navigate?: boolean;
 }
 
+
 /**
  * 用户状态管理
  * 管理用户登录状态、个人信息、语言设置、搜索历史、锁屏状态等
@@ -130,6 +131,19 @@ export const useUserStore = defineStore(
       if (newRefreshToken) {
         refreshToken.value = newRefreshToken;
       }
+    };
+
+    /**
+     * 确保工作栏标签归当前业务账号所有
+     *
+     * 标签栏按账号分桶存储（worktab:{账号}），这里在登录成功后切换到当前账号自己的桶，
+     * 实现「管理员看管理员的、审核员看审核员的」，切换账号后各自的标签互不影响。
+     *
+     * @param username 当前业务账号（user_account.username）
+     */
+    const ensureWorktabOwner = (username?: string) => {
+      if (!username) return;
+      useWorktabStore().applyOwner(username);
     };
 
     /**
@@ -295,6 +309,8 @@ export const useUserStore = defineStore(
       // 业务用户信息（角色码供前端菜单过滤）
       businessInfo.value = data.userinfo;
       isBusinessLogin.value = true;
+      // 换账号登录（如管理员 → 审核员）：清空上一账号遗留的工作栏标签
+      ensureWorktabOwner(data.userinfo.username);
       setBizMode(true);
       Object.assign(info.value, {
         username: data.userinfo.username,
@@ -317,6 +333,8 @@ export const useUserStore = defineStore(
         const data = response.data.data;
         businessInfo.value = data;
         isBusinessLogin.value = true;
+        // F5 恢复会话：账号若变化（如浏览器里已换号登录），清空上一账号遗留标签
+        ensureWorktabOwner(data.username);
         setBizMode(true);
         Object.assign(info.value, {
           username: data.username,
@@ -423,8 +441,7 @@ export const useUserStore = defineStore(
       accessToken.value = "";
       refreshToken.value = "";
       prems.value = [];
-      /** 登出 / 认证失效：会话结束，工作栏与 KeepAlive exclude 一并清空（pinia 持久化随之写入） */
-      useWorktabStore().clearAll();
+      /** 会话结束不再清空标签：工作栏按账号分桶持久化，该账号下次登录回来仍是自己的标签 */
       /** 登出：断开聊天 WebSocket 并清空未读/在线状态 */
       useChatStore(store).clearUserInfo();
     }

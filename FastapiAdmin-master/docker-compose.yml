@@ -84,6 +84,8 @@ services:
     ports:
       - "80:80"
     volumes:
+      # 管理端静态产物（bind 只读：更新 /web 只需覆盖 dist 后 docker compose up -d web，无需在服务器重跑 vite 构建）
+      - ./frontend/web/dist:/usr/share/nginx/html/web:ro
       # 医生端 H5 静态产物（bind 只读：更新 H5 只需覆盖该目录后 docker compose restart web，无需重建镜像）
       - ./frontend/app/dist/build/h5:/usr/share/nginx/html/app:ro
       # nginx 配置（bind 只读：改 conf 后 docker compose up -d web 即生效，无需重建镜像）

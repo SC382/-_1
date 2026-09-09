@@ -31,8 +31,8 @@
  *
  * ## 持久化
  * - 使用 localStorage 存储
- * - 存储键：sys-v{version}-worktab
- * - 刷新页面保持标签状态
+ * - 存储键：worktab:{账号}（按登录账号分桶，管理员 / 审核员各存各的工作栏）
+ * - 刷新页面保持标签状态（恢复到「当前归属账号」自己的桶）
  *
  * @module store/modules/worktab.store
  * @author FastapiAdmin Team
@@ -51,6 +51,35 @@ interface WorktabState {
   opened: WorkTab[];
   keepAliveExclude: string[];
 }
+
+/**
+ * 当前生效的工作栏归属账号（localStorage 键名）
+ *
+ * 标签栏按账号隔离存储：桶键为 `worktab:{账号}`，此键记录「当前应读写哪个桶」。
+ */
+const WORKTAB_OWNER_KEY = "cpx-worktab-owner";
+
+/** 未登录 / 无归属时的兜底桶名 */
+const ANONYMOUS_OWNER = "__anonymous__";
+
+/** 读取当前归属账号 */
+const getWorktabOwner = (): string => localStorage.getItem(WORKTAB_OWNER_KEY) || ANONYMOUS_OWNER;
+
+/**
+ * 按账号读写 localStorage 的存储适配器
+ *
+ * 供 pinia 持久化使用：插件名义键为 `worktab`，实际写入 `worktab:{当前账号}`，
+ * 从而让不同账号（管理员 / 审核员）各自保留自己的标签集合。
+ */
+const scopedWorktabStorage = {
+  getItem: (key: string): string | null => localStorage.getItem(`${key}:${getWorktabOwner()}`),
+  setItem: (key: string, value: string): void => {
+    localStorage.setItem(`${key}:${getWorktabOwner()}`, value);
+  },
+  removeItem: (key: string): void => {
+    localStorage.removeItem(`${key}:${getWorktabOwner()}`);
+  },
+};
 
 /**
  * 工作台标签页管理 Store
@@ -530,19 +559,52 @@ export const useWorktabStore = defineStore(
     };
 
     /**
-     * 清空所有状态（用于登出等场景）
+     * 切换标签栏归属账号，并载入「该账号自己」的标签集合
      *
-     * 保留固定标签页（fixedTab: true），登出后重新登录时首页等常驻标签依然存在。
+     * 登录成功后调用：管理员登录后看到管理员的工作栏，切换到审核员登录则载入审核员的工作栏，
+     * 两者互不影响（各自存在 `worktab:{账号}` 桶里）。
+     *
+     * @param owner 账号名（user_account.username）
      */
-    const clearAll = (): void => {
-      const fixedTabs = opened.value.filter((tab) => tab.fixedTab);
-      if (fixedTabs.length > 0) {
-        opened.value = fixedTabs;
-        current.value = { ...fixedTabs[0] };
-      } else {
+    const applyOwner = (owner: string): void => {
+      if (!owner || getWorktabOwner() === owner) return;
+
+      // 载入目标账号自己的桶
+      try {
+        const raw = localStorage.getItem(`worktab:${owner}`);
+        const data = raw ? (JSON.parse(raw) as Partial<WorktabState>) : null;
+        current.value = data?.current ?? {};
+        opened.value = data?.opened ?? [];
+        keepAliveExclude.value = [];
+      } catch {
         current.value = {};
         opened.value = [];
+        keepAliveExclude.value = [];
       }
+
+      localStorage.setItem(WORKTAB_OWNER_KEY, owner);
+    };
+
+    /**
+     * 清空所有状态（用于登出等场景）
+     *
+     * 默认保留固定标签页（fixedTab: true），登出后重新登录时首页等常驻标签依然存在。
+     *
+     * @param force 为 true 时连同固定标签页一并清空（用于「换账号登录」场景，
+     *              避免上一账号的常驻标签出现在另一账号的工作台）
+     */
+    const clearAll = (force = false): void => {
+      if (!force) {
+        const fixedTabs = opened.value.filter((tab) => tab.fixedTab);
+        if (fixedTabs.length > 0) {
+          opened.value = fixedTabs;
+          current.value = { ...fixedTabs[0] };
+          keepAliveExclude.value = [];
+          return;
+        }
+      }
+      current.value = {};
+      opened.value = [];
       keepAliveExclude.value = [];
     };
 
@@ -632,6 +694,9 @@ export const useWorktabStore = defineStore(
       clearAll,
       getStateSnapshot,
 
+      // 按账号隔离
+      applyOwner,
+
       // 工具方法
       findTabIndex,
       getTab,
@@ -648,7 +713,8 @@ export const useWorktabStore = defineStore(
   {
     persist: {
       key: "worktab",
-      storage: localStorage,
+      // 实际落库为 worktab:{当前账号}，实现管理员 / 审核员标签栏相互隔离
+      storage: scopedWorktabStorage,
     },
   }
 );

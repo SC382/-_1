@@ -52,6 +52,10 @@ def _resolve_image_data_uri(image_url: str) -> str:
     - data: 开头 → 原样
     - 本机地址（127.0.0.1/localhost/局域网 IP）或 /static 相对路径 → 读磁盘文件转 base64
     - 公网 http(s) → 原样透传（模型服务自行下载）
+
+    注意：站内相对路径可能带静态文件签名参数（?exp=&sign=，见 core/signed_url.py），
+    解析磁盘文件前必须先剥离查询串，否则会拼出带 ? 的文件名导致找不到文件，
+    进而把无法访问的相对 URL 直接传给模型服务造成 400。
     """
     import base64 as _b64
     import mimetypes
@@ -70,6 +74,8 @@ def _resolve_image_data_uri(image_url: str) -> str:
             path = parsed.path
         else:
             return image_url
+    # 剥离静态文件签名等查询串（?exp=&sign=）与锚点，仅保留真实路径部分
+    path = path.split("?", 1)[0].split("#", 1)[0]
     # 去掉 /api/v1/static/ 或 /static/ 前缀，映射到磁盘 STATIC_DIR
     if "/api/v1/static/" in path:
         path = path.split("/api/v1/static/", 1)[1]

@@ -626,7 +626,10 @@ function aiEntry() {
   })
 }
 
-/** 语音识别：优先 Web Speech API（H5原生），降级手动输入 */
+// ── 语音识别：App 端真实录音 → ASR 转写 → AI 解析回填；H5 用 Web Speech，不支持则手动输入 ──
+let voiceRecorder: any = null
+let voiceRecording = false
+
 function startVoiceRecognition() {
   // #ifdef H5
   if (typeof window !== 'undefined' && ('SpeechRecognition' in (window as any) || 'webkitSpeechRecognition' in (window as any))) {
@@ -652,9 +655,91 @@ function startVoiceRecognition() {
     recognition.start()
     return
   }
-  // #endif
-  // 降级：手动输入
+  // 无 Web Speech 的浏览器：手动输入降级
   voiceInputManual()
+  return
+  // #endif
+  // #ifndef H5
+  // 真录音：第一次点「语音识别」开始录音；录音中再次点一次即结束并转写
+  if (!voiceRecording) startVoiceRecordFill()
+  else stopVoiceRecordFill()
+  // #endif
+}
+
+function ensureVoiceRecorderFill() {
+  if (voiceRecorder) return voiceRecorder
+  const rm: any = uni.getRecorderManager()
+  if (!rm) return null
+  rm.onStop((res: any) => {
+    voiceRecording = false
+    uni.hideLoading()
+    const fs = uni.getFileSystemManager()
+    fs.readFile({
+      filePath: res.tempFilePath,
+      encoding: 'base64',
+      success: async (r: any) => {
+        uni.showLoading({ title: '语音转写中...' })
+        try {
+          const data = await DoctorAPI.asr({ audio_base64: r.data as string, format: 'mp3' })
+          uni.hideLoading()
+          const text = (data.text || '').trim()
+          if (!text) {
+            uni.showToast({ title: '未识别到内容，请重试', icon: 'none' })
+            return
+          }
+          // 转写文本可编辑确认 → AI 解析回填
+          uni.showModal({
+            title: '识别内容确认',
+            editable: true,
+            content: text,
+            success: async (m) => {
+              if (!m.confirm || !m.content) return
+              uni.showLoading({ title: 'AI 解析中...' })
+              try {
+                const result = await http.Post('/cpx/doctor/ai/recognize', { text: m.content }) as Record<string, string>
+                uni.hideLoading()
+                fillFormData(result)
+              }
+              catch {
+                uni.hideLoading()
+                uni.showToast({ title: 'AI 解析失败', icon: 'none' })
+              }
+            },
+          })
+        }
+        catch (e: any) {
+          uni.hideLoading()
+          uni.showToast({ title: e?.msg || '语音转写失败，请重试', icon: 'none' })
+        }
+      },
+      fail: () => {
+        uni.hideLoading()
+        uni.showToast({ title: '读取录音失败', icon: 'none' })
+      },
+    })
+  })
+  rm.onError(() => {
+    voiceRecording = false
+    uni.hideLoading()
+    uni.showToast({ title: '录音失败，请重试', icon: 'none' })
+  })
+  voiceRecorder = rm
+  return rm
+}
+
+function startVoiceRecordFill() {
+  const rm = ensureVoiceRecorderFill()
+  if (!rm) {
+    uni.showToast({ title: '当前环境不支持录音', icon: 'none' })
+    return
+  }
+  voiceRecording = true
+  rm.start({ format: 'mp3', sampleRate: 16000 })
+  uni.showToast({ title: '开始录音，说完后再次选择"语音识别"结束', icon: 'none', duration: 3000 })
+}
+
+function stopVoiceRecordFill() {
+  if (voiceRecorder) voiceRecorder.stop()
 }
 
 /** 手动输入文字 → 调用后端 AI 解析（降级方案） */

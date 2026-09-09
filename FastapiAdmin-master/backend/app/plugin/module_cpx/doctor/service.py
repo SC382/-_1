@@ -1262,6 +1262,8 @@ class DoctorService:
                         path = parsed.path
                     else:
                         return None
+                # 剥离静态文件签名等查询串（?exp=&sign=）与锚点，否则磁盘路径带 ? 会找不到文件
+                path = path.split("?", 1)[0].split("#", 1)[0]
                 if "/api/v1/static/" in path:
                     path = path.split("/api/v1/static/", 1)[1]
                 elif "/static/" in path:
@@ -2516,10 +2518,10 @@ class DoctorService:
         if suffix not in allowed:
             raise CustomException(msg="仅支持图片文件（png/jpg/jpeg/gif/webp/bmp）")
 
-        # 大小限制 5MB
+        # 大小限制 50MB
         content = await file.read()
-        if len(content) > 5 * 1024 * 1024:
-            raise CustomException(msg="图片大小不能超过 5MB")
+        if len(content) > 50 * 1024 * 1024:
+            raise CustomException(msg="图片大小不能超过 50MB")
 
         sub = datetime.now().strftime("%Y%m%d")
         upload_dir = STATIC_DIR / "uploads" / "doctor" / sub

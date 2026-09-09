@@ -302,17 +302,93 @@ function chooseIdCardSource(cardType: string) {
   })
 }
 
-/** AI 语音识别：输入文本 → 后端 ai/recognize 提取患者信息回填（真实解析） */
+// ── 语音输入：App 端真实录音 → 后端 ASR 转写 → AI 解析回填；H5 无原生录音 → 文本降级 ──
+let recorderManager: any = null
+let recordingVoice = false
+
 function voiceInput() {
+  // #ifdef H5
   uni.showModal({
     title: 'AI 语音录入',
     editable: true,
-    placeholderText: '输入如：「患者李四，男，58岁，电话13812345678」',
+    placeholderText: '语音录入请使用 App 端；此处可直接输入，如：「患者李四，男，58岁，电话13812345678」',
     success: (res) => {
       if (!res.confirm || !res.content) return
       recognizeFromText(res.content)
     },
   })
+  // #endif
+  // #ifndef H5
+  // 第一次点击 = 开始录音；录音中再次点击 = 结束并转写
+  if (!recordingVoice) startVoiceRecord()
+  else stopVoiceRecord()
+  // #endif
+}
+
+function ensureVoiceRecorder() {
+  if (recorderManager) return recorderManager
+  const rm: any = uni.getRecorderManager()
+  if (!rm) return null
+  rm.onStop((res: any) => {
+    recordingVoice = false
+    uni.hideLoading()
+    const fs = uni.getFileSystemManager()
+    fs.readFile({
+      filePath: res.tempFilePath,
+      encoding: 'base64',
+      success: async (r: any) => {
+        uni.showLoading({ title: '语音转写中...' })
+        try {
+          const data = await DoctorAPI.asr({ audio_base64: r.data as string, format: 'mp3' })
+          uni.hideLoading()
+          const text = (data.text || '').trim()
+          if (!text) {
+            uni.showToast({ title: '未识别到内容，请重试', icon: 'none' })
+            return
+          }
+          // 转写文本可编辑确认 → AI 解析回填
+          uni.showModal({
+            title: '识别内容确认',
+            editable: true,
+            content: text,
+            success: (m) => {
+              if (m.confirm && m.content) recognizeFromText(m.content)
+            },
+          })
+        }
+        catch (e: any) {
+          uni.hideLoading()
+          uni.showToast({ title: e?.msg || '语音转写失败，请重试', icon: 'none' })
+        }
+      },
+      fail: () => {
+        uni.hideLoading()
+        uni.showToast({ title: '读取录音失败', icon: 'none' })
+      },
+    })
+  })
+  rm.onError(() => {
+    recordingVoice = false
+    uni.hideLoading()
+    uni.showToast({ title: '录音失败，请重试', icon: 'none' })
+  })
+  recorderManager = rm
+  return rm
+}
+
+function startVoiceRecord() {
+  const rm = ensureVoiceRecorder()
+  if (!rm) {
+    uni.showToast({ title: '当前环境不支持录音', icon: 'none' })
+    return
+  }
+  recordingVoice = true
+  rm.start({ format: 'mp3', sampleRate: 16000 })
+  uni.showToast({ title: '开始录音，说完后再次点击"语音输入"结束', icon: 'none', duration: 3000 })
+}
+
+function stopVoiceRecord() {
+  if (recorderManager) recorderManager.stop()
 }
 
 /** 图片识别：照片拍摄/本地上传 → OCR 回填（真实调用） */
