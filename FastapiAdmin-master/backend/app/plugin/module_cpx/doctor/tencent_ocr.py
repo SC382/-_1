@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """腾讯云文字识别 OCR 调用封装（TC3-HMAC-SHA256 签名，纯标准库 + httpx，无第三方云 SDK 依赖）。
 
-供胸痛中心证件扫描使用：身份证识别 IDCardOCR（Version 2018-11-19）。
+供胸痛中心证件扫描使用：
+- idcard_ocr：身份证识别 IDCardOCR（Version 2018-11-19）
+- general_ocr：通用印刷体识别 GeneralBasicOCR（医保卡等无专用接口的卡片）
+
 注意：腾讯云 OCR 接口仅支持主账号 SecretId/SecretKey 调用。
 """
 import hashlib
@@ -22,34 +25,29 @@ def _utc_date(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-async def idcard_ocr(
-    image_base64: str,
+async def _tc3_post(
+    action: str,
+    payload: dict,
     secret_id: str,
     secret_key: str,
     region: str = "ap-guangzhou",
-    card_side: str = "FRONT",
     timeout: float = 30,
 ) -> dict:
-    """调用腾讯云 IDCardOCR 识别身份证单面。
+    """腾讯云 TC3-HMAC-SHA256 签名 POST（JSON）。失败抛 RuntimeError（含腾讯业务错误码）。"""
+    import json
 
-    入参 image_base64 为纯 base64（不含 data: 前缀）；card_side 默认 FRONT（人像面）。
-    返回腾讯云响应中的 Response 体（字段为 {Content, Confidence} 结构）。
-    失败抛 RuntimeError（含腾讯返回的业务错误码与信息）。
-    """
-    payload = '{"ImageBase64":%s,"CardSide":%s}' % (
-        _json_str(image_base64),
-        _json_str(card_side),
-    )
+    body_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     ts = int(datetime.now().timestamp())
     date = _utc_date(ts)
     service = "ocr"
     algorithm = "TC3-HMAC-SHA256"
+    action_lower = action.lower()
 
-    hashed_payload = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    hashed_payload = hashlib.sha256(body_str.encode("utf-8")).hexdigest()
     canonical_headers = (
         "content-type:application/json; charset=utf-8\n"
         f"host:{OCR_HOST}\n"
-        "x-tc-action:idcardocr\n"
+        f"x-tc-action:{action_lower}\n"
     )
     signed_headers = "content-type;host;x-tc-action"
     canonical_request = "POST\n/\n\n" + canonical_headers + "\n" + signed_headers + "\n" + hashed_payload
@@ -75,7 +73,7 @@ async def idcard_ocr(
         "Authorization": authorization,
         "Content-Type": "application/json; charset=utf-8",
         "Host": OCR_HOST,
-        "X-TC-Action": "IDCardOCR",
+        "X-TC-Action": action,
         "X-TC-Version": OCR_VERSION,
         "X-TC-Timestamp": str(ts),
         "X-TC-Region": region,
@@ -83,7 +81,7 @@ async def idcard_ocr(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
-            f"https://{OCR_HOST}/", headers=headers, content=payload
+            f"https://{OCR_HOST}/", headers=headers, content=body_str
         )
         resp.raise_for_status()
         data = resp.json()
@@ -97,8 +95,44 @@ async def idcard_ocr(
     return body
 
 
-def _json_str(value: str) -> str:
-    """把字符串安全放进 JSON 字面量（避免手拼引号转义问题）。"""
-    import json
+async def idcard_ocr(
+    image_base64: str,
+    secret_id: str,
+    secret_key: str,
+    region: str = "ap-guangzhou",
+    card_side: str = "FRONT",
+    timeout: float = 30,
+) -> dict:
+    """调用腾讯云 IDCardOCR 识别身份证单面。
 
-    return json.dumps(value, ensure_ascii=False)
+    image_base64 为纯 base64（不含 data: 前缀）；card_side 默认 FRONT（人像面）。
+    返回腾讯云 Response 体（实测字段为顶层字符串，文档形态为 {Content, Confidence}）。
+    """
+    return await _tc3_post(
+        "IDCardOCR",
+        {"ImageBase64": image_base64, "CardSide": card_side},
+        secret_id,
+        secret_key,
+        region=region,
+        timeout=timeout,
+    )
+
+
+async def general_ocr(
+    image_base64: str,
+    secret_id: str,
+    secret_key: str,
+    region: str = "ap-guangzhou",
+    timeout: float = 30,
+) -> list[str]:
+    """调用腾讯云 GeneralBasicOCR 通用印刷体识别，返回识别出的文本行列表（按识别顺序）。"""
+    body = await _tc3_post(
+        "GeneralBasicOCR",
+        {"ImageBase64": image_base64},
+        secret_id,
+        secret_key,
+        region=region,
+        timeout=timeout,
+    )
+    items = body.get("DetectedTexts") or []
+    return [str(i.get("DetectedText", "")).strip() for i in items if i.get("DetectedText")]

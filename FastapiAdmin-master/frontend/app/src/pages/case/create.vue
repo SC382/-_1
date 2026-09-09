@@ -77,14 +77,14 @@ const FIELD_MAP: Record<string, string> = {
   gender: 'gender', '性别': 'gender',
   age: 'age', '年龄': 'age',
   birth_date: 'birth_date', '出生日期': 'birth_date',
-  id_number: 'id_number', '身份证号': 'id_number',
+  id_number: 'id_number', '身份证号': 'id_number', '社会保障号码': 'id_number', '公民身份号码': 'id_number',
   id_type: 'id_type', '证件类型': 'id_type', 'card_type': 'id_type',
   phone: 'phone', '联系电话': 'phone', '电话': 'phone',
   come_type: 'come_type', '来院方式': 'come_type',
   onset_address: 'onset_address', '发病地址': 'onset_address',
   detail_address: 'detail_address', '详细地址': 'detail_address',
   insurance_type: 'insurance_type', '医保类型': 'insurance_type',
-  insurance_no: 'insurance_no', '医保编号': 'insurance_no', '医保号': 'insurance_no',
+  insurance_no: 'insurance_no', '医保编号': 'insurance_no', '医保号': 'insurance_no', '医保卡号': 'insurance_no', '社保卡号': 'insurance_no', '卡号': 'insurance_no',
   diagnose_type: 'diagnose_type', '诊断': 'diagnose_type', '诊断类型': 'diagnose_type',
 }
 
@@ -214,14 +214,22 @@ async function recognizeImage(url: string) {
   }
 }
 
-/** 身份证 OCR（腾讯云，不走大模型）：压缩 → 上传 → OCR → 回填 */
-function recognizeIdCardOcr(filePath: string) {
-  uni.showLoading({ title: '证件识别中...' })
+/** 证件 OCR（腾讯云，不走大模型）：身份证 IDCardOCR / 医保卡通用识别 → 回填；医保卡附识别文字供核对 */
+function recognizeIdCardOcr(filePath: string, cardType: string) {
+  uni.showLoading({ title: `${cardType}识别中...` })
   compressForAI(filePath, (compressed) => {
     uploadToServer(compressed, async (url) => {
       try {
-        const result = await http.Post('/cpx/doctor/ai/ocr', { image_url: url, card_type: '身份证' }) as Record<string, string>
+        const result = await http.Post('/cpx/doctor/ai/ocr', { image_url: url, card_type: cardType }) as Record<string, string>
         fillFromRecognized(result)
+        if (result.ocr_text) {
+          uni.showModal({
+            title: '识别文字（请核对补充）',
+            content: result.ocr_text,
+            showCancel: false,
+            confirmText: '知道了',
+          })
+        }
       }
       catch {
         uni.hideLoading()
@@ -321,12 +329,8 @@ function idCardEntry() {
 }
 
 function chooseIdCardSource(cardType: string) {
-  // 先把用户选定的证件类型显示出来，再由识别/手动方式填充其余信息
+  // 先把用户选定的证件类型显示出来，再由 OCR / 手动方式填充其余信息
   form.value.id_type = cardType
-  if (cardType !== '身份证') {
-    uni.showToast({ title: '医保卡暂无自动识别，请手动填写卡面信息', icon: 'none', duration: 2500 })
-    return
-  }
   uni.showActionSheet({
     itemList: ['照片拍摄', '本地上传'],
     success: (res) => {
@@ -335,7 +339,7 @@ function chooseIdCardSource(cardType: string) {
         count: 1,
         sourceType: [sourceType],
         success: (chooseRes) => {
-          recognizeIdCardOcr(chooseRes.tempFilePaths[0])
+          recognizeIdCardOcr(chooseRes.tempFilePaths[0], cardType)
         },
         fail: (err: any) => {
           const msg = (err && err.errMsg) || ''

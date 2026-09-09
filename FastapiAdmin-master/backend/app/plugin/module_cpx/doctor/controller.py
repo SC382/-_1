@@ -23,6 +23,7 @@ from app.plugin.module_cpx.doctor.schema import (
 )
 from app.plugin.module_cpx.doctor.service import DoctorService
 from app.plugin.module_cpx.doctor.tencent_ocr import idcard_ocr as _tencent_idcard_ocr
+from app.plugin.module_cpx.doctor.tencent_ocr import general_ocr as _tencent_general_ocr
 from app.plugin.module_cpx.log.service import LogService, get_client_ip
 from app.plugin.module_cpx.fields import FIELDS as _CPX_FIELDS
 
@@ -615,7 +616,7 @@ async def ai_recognize_controller(
         return SuccessResponse(data={"raw_text": content}, msg="AI 返回文本（请核对）")
 
 
-@DoctorRouter.post("/ai/ocr", summary="证件 OCR 识别（腾讯云 IDCardOCR，身份证人像面）")
+@DoctorRouter.post("/ai/ocr", summary="证件 OCR 识别（腾讯云：身份证 IDCardOCR / 医保卡通用印刷体）")
 async def ai_ocr_controller(
     auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_DOCTOR]))],
     body: Annotated[dict, Body(description='{"image_url": "图片URL", "card_type": "身份证|医保卡"}')],
@@ -624,9 +625,8 @@ async def ai_ocr_controller(
     card_type = (body.get("card_type") or "身份证").strip()
     if not image_url:
         raise CustomException(msg="请提供 image_url 参数")
-    if card_type != "身份证":
-        # 医保卡无国标版式、腾讯 OCR 无专用接口 → 引导手动填写（不假装识别）
-        raise CustomException(msg="医保卡暂无自动识别，请手动填写卡片信息")
+    if card_type not in ("身份证", "医保卡"):
+        raise CustomException(msg=f"暂不支持识别证件类型：{card_type}")
     secret_id = settings.TENCENT_OCR_SECRET_ID
     secret_key = settings.TENCENT_OCR_SECRET_KEY
     if not secret_id or not secret_key or secret_id.startswith("<请填写"):
@@ -645,13 +645,29 @@ async def ai_ocr_controller(
             image_b64 = _b64.b64encode(r.content).decode()
         except Exception as e:
             raise CustomException(msg=f"图片获取失败：{e}") from e
+    region = settings.TENCENT_OCR_REGION or "ap-guangzhou"
+    if card_type == "身份证":
+        out = await _idcard_ocr_fields(image_b64, secret_id, secret_key, region)
+        return SuccessResponse(data=out, msg="证件识别成功")
+    # 医保卡：版式不统一 → 通用印刷体识别 + 关键字段自动提取 + 全文字供医生核对
     try:
-        resp_body = await _tencent_idcard_ocr(
-            image_b64,
-            secret_id,
-            secret_key,
-            region=settings.TENCENT_OCR_REGION or "ap-guangzhou",
-        )
+        lines = await _tencent_general_ocr(image_b64, secret_id, secret_key, region=region)
+    except httpx.HTTPError as e:
+        raise CustomException(msg=f"腾讯云 OCR 请求失败：{e}") from e
+    except RuntimeError as e:
+        raise CustomException(msg=str(e)) from e
+    out, ocr_text = _parse_insurance_lines(lines)
+    if ocr_text:
+        out["ocr_text"] = ocr_text
+    if not (out.get("id_number") or out.get("insurance_no") or out.get("patient_name")):
+        raise CustomException(msg="未识别到医保卡信息，请正对卡片、光线充足、避免反光后重拍")
+    return SuccessResponse(data=out, msg="医保卡识别成功（请核对弹窗文字补充姓名/卡号）")
+
+
+async def _idcard_ocr_fields(image_b64: str, secret_id: str, secret_key: str, region: str) -> dict:
+    """身份证识别并映射为建档字段 key（与前端 fillFromRecognized 兼容）。"""
+    try:
+        resp_body = await _tencent_idcard_ocr(image_b64, secret_id, secret_key, region=region)
     except httpx.HTTPError as e:
         raise CustomException(msg=f"腾讯云 OCR 请求失败：{e}") from e
     except RuntimeError as e:
@@ -671,7 +687,54 @@ async def ai_ocr_controller(
         out["id_number"] = id_num
     if not out:
         raise CustomException(msg="未识别到有效身份证信息，请正对证件、光线充足、避免反光后重拍")
-    return SuccessResponse(data=out, msg="证件识别成功")
+    return out
+
+
+def _parse_insurance_lines(lines: list[str]) -> tuple[dict, str]:
+    """从医保卡通用识别文本中尽力提取：18 位社保号 → id_number、卡号 → insurance_no、姓名 → patient_name。
+
+    返回 (结构化字段, 全部识别文本)。医保卡版式不统一，姓名/卡号无法保证准，交给医生核对。
+    """
+    import re
+
+    joined = [str(x).strip() for x in lines if str(x).strip()]
+    ocr_text = " ".join(joined)[:500]
+    out: dict = {}
+    # 1) 18 位社会保障号码 / 身份证号
+    id18 = ""
+    for ln in joined:
+        m = re.search(r"(?<!\d)\d{17}[\dXx](?!\d)", ln)
+        if m:
+            id18 = m.group(0)
+            break
+    # 2) 卡号：优先 12 位纯数字（社会保障卡卡号），或「卡号/编号」标签后的数字串
+    card_no = ""
+    for ln in joined:
+        if re.fullmatch(r"\d{17}[\dXx]", ln):
+            continue
+        if re.fullmatch(r"\d{12}", ln):
+            card_no = ln
+            break
+    if not card_no:
+        for ln in joined:
+            m = re.search(r"(?:卡号|编号|个人编号)\s*[:：]?\s*([A-Z0-9]{8,16})", ln)
+            if m:
+                card_no = m.group(1)
+                break
+    # 3) 姓名：仅取「姓名」标签同行后的 1~6 汉字（不跨行猜，防误填）
+    name = ""
+    for ln in joined:
+        m = re.search(r"姓名\s*[:：]?\s*([\u4e00-\u9fa5]{1,6})", ln)
+        if m:
+            name = m.group(1)
+            break
+    if id18:
+        out["id_number"] = id18
+    if card_no:
+        out["insurance_no"] = card_no
+    if name:
+        out["patient_name"] = name
+    return out, ocr_text
 
 
 def _ocr_text(body: dict, key: str) -> str:
