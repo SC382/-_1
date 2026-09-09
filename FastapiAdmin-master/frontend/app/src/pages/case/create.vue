@@ -317,6 +317,11 @@ function chooseIdCardSource(cardType: string) {
           uni.showLoading({ title: `${cardType}识别中...` })
           recognizeFromImage(chooseRes.tempFilePaths[0])
         },
+        fail: (err: any) => {
+          const msg = (err && err.errMsg) || ''
+          if (msg.includes('cancel')) { uni.showToast({ title: '已取消', icon: 'none' }); return }
+          uni.showToast({ title: `拍照/选图失败：${msg}`, icon: 'none', duration: 2500 })
+        },
       })
     },
   })
@@ -329,6 +334,7 @@ let recordingVoice = false
 const voiceActive = ref(false)
 const voiceSeconds = ref(0)
 let voiceTimer: any = null
+let voiceStopFallback: any = null
 
 function clearVoiceTimer() {
   if (voiceTimer) {
@@ -361,6 +367,7 @@ function ensureVoiceRecorder() {
   const rm: any = uni.getRecorderManager()
   if (!rm) return null
   rm.onStop((res: any) => {
+    if (voiceStopFallback) { clearTimeout(voiceStopFallback); voiceStopFallback = null }
     recordingVoice = false
     voiceActive.value = false
     clearVoiceTimer()
@@ -401,6 +408,7 @@ function ensureVoiceRecorder() {
     })
   })
   rm.onError(() => {
+    if (voiceStopFallback) { clearTimeout(voiceStopFallback); voiceStopFallback = null }
     recordingVoice = false
     voiceActive.value = false
     clearVoiceTimer()
@@ -435,7 +443,18 @@ function startVoiceRecord() {
 
 function stopVoiceRecord() {
   clearVoiceTimer()
+  if (voiceStopFallback) { clearTimeout(voiceStopFallback); voiceStopFallback = null }
   if (recorderManager) recorderManager.stop()
+  // 兜底：若 2 秒内未收到 onStop/onError（如录音未真正开始），强制复位，防止录音条卡死无法退出
+  voiceStopFallback = setTimeout(() => {
+    voiceStopFallback = null
+    if (voiceActive.value || recordingVoice) {
+      recordingVoice = false
+      voiceActive.value = false
+      uni.hideLoading()
+      uni.showToast({ title: '录音已结束', icon: 'none' })
+    }
+  }, 2000)
 }
 
 /** 图片识别：照片拍摄/本地上传 → OCR 回填（真实调用） */
@@ -444,6 +463,11 @@ function imageRecognize(sourceType: 'camera' | 'album') {
     count: 1,
     sourceType: [sourceType],
     success: (chooseRes) => recognizeFromImage(chooseRes.tempFilePaths[0]),
+    fail: (err: any) => {
+      const msg = (err && err.errMsg) || ''
+      if (msg.includes('cancel')) { uni.showToast({ title: '已取消', icon: 'none' }); return }
+      uni.showToast({ title: `拍照/选图失败：${msg}`, icon: 'none', duration: 2500 })
+    },
   })
 }
 

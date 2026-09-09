@@ -64,6 +64,11 @@ function uploadImage(f: TemplateField) {
         fail: () => { uni.hideLoading(); uni.showToast({ title: '上传失败', icon: 'none' }) },
       })
     },
+    fail: (err: any) => {
+      const msg = (err && err.errMsg) || ''
+      if (msg.includes('cancel')) { uni.showToast({ title: '已取消', icon: 'none' }); return }
+      uni.showToast({ title: `拍照/选图失败：${msg}`, icon: 'none', duration: 2500 })
+    },
   })
 }
 
@@ -584,6 +589,11 @@ function idCardEntry() {
             }
           })
         },
+        fail: (err: any) => {
+          const msg = (err && err.errMsg) || ''
+          if (msg.includes('cancel')) { uni.showToast({ title: '已取消', icon: 'none' }); return }
+          uni.showToast({ title: `拍照/选图失败：${msg}`, icon: 'none', duration: 2500 })
+        },
       })
     },
   })
@@ -634,6 +644,11 @@ function aiEntry() {
               })
             })
           },
+          fail: (err: any) => {
+            const msg = (err && err.errMsg) || ''
+            if (msg.includes('cancel')) { uni.showToast({ title: '已取消', icon: 'none' }); return }
+            uni.showToast({ title: `拍照/选图失败：${msg}`, icon: 'none', duration: 2500 })
+          },
         })
       }
       else {
@@ -651,6 +666,7 @@ let voiceRecording = false
 const voiceActive = ref(false)
 const voiceSeconds = ref(0)
 let voiceTimer: any = null
+let voiceStopFallbackFill: any = null
 
 function clearVoiceTimerFill() {
   if (voiceTimer) {
@@ -700,6 +716,7 @@ function ensureVoiceRecorderFill() {
   const rm: any = uni.getRecorderManager()
   if (!rm) return null
   rm.onStop((res: any) => {
+    if (voiceStopFallbackFill) { clearTimeout(voiceStopFallbackFill); voiceStopFallbackFill = null }
     voiceRecording = false
     voiceActive.value = false
     clearVoiceTimerFill()
@@ -750,6 +767,7 @@ function ensureVoiceRecorderFill() {
     })
   })
   rm.onError(() => {
+    if (voiceStopFallbackFill) { clearTimeout(voiceStopFallbackFill); voiceStopFallbackFill = null }
     voiceRecording = false
     voiceActive.value = false
     clearVoiceTimerFill()
@@ -784,7 +802,18 @@ function startVoiceRecordFill() {
 
 function stopVoiceRecordFill() {
   clearVoiceTimerFill()
+  if (voiceStopFallbackFill) { clearTimeout(voiceStopFallbackFill); voiceStopFallbackFill = null }
   if (voiceRecorder) voiceRecorder.stop()
+  // 兜底：若 2 秒内未收到 onStop/onError（如录音未真正开始），强制复位，防止录音条卡死无法退出
+  voiceStopFallbackFill = setTimeout(() => {
+    voiceStopFallbackFill = null
+    if (voiceActive.value || voiceRecording) {
+      voiceRecording = false
+      voiceActive.value = false
+      uni.hideLoading()
+      uni.showToast({ title: '录音已结束', icon: 'none' })
+    }
+  }, 2000)
 }
 
 /** 手动输入文字 → 调用后端 AI 解析（降级方案） */
