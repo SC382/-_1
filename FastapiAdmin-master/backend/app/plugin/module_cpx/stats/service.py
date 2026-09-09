@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import CustomException
 from app.plugin.module_cpx.auth.dependencies import BizAuth
 from app.plugin.module_cpx.audit.service import AuditService
 from app.plugin.module_cpx.fields import QUALITY_METRICS
@@ -171,6 +172,92 @@ class StatsService:
             "case_total": len(cases),
             "time_issue_cases": len(abnormal_case_ids),
             "metrics": metric_rows,
+        }
+
+    async def qc_detail(self, *, key: str) -> dict:
+        """质控单指标病例级明细（含医院/患者），供驾驶舱质控卡下钻弹窗。
+
+        与 _qc_stats 同一数据口径：状态为 submitted/approved/rejected 的病例，
+        form_data 经 ORM 自动解密。每行 result ∈ pass(达标)/over(超阈值未达标)/
+        invert(时间倒挂)/missing(起止缺失)；limit 为 None 的指标（如 S2FMC）
+        无达标概念，有效行统一 result=ok。
+        """
+        metric = next((m for m in QUALITY_METRICS if m["key"] == key), None)
+        if not metric:
+            raise CustomException(msg=f"未知质控指标: {key}")
+
+        # 病例 + 详情左连接（无 case_detail 的病例视作无表单 → 计入 missing，与卡片 case_total 口径一致）
+        rows = await self.db.execute(
+            select(CaseRecordModel, CaseDetailModel)
+            .outerjoin(CaseDetailModel, CaseDetailModel.case_id == CaseRecordModel.id)
+            .where(CaseRecordModel.status.in_(["submitted", "approved", "rejected"]))
+        )
+        pairs = rows.all()
+        cases = [c for c, _ in pairs]
+        details = [d for _, d in pairs]
+
+        # 医院名预取
+        hid_set = {c.hospital_id for c in cases if c.hospital_id}
+        hospital_map: dict[int, str] = {}
+        if hid_set:
+            hrows = await self.db.execute(
+                select(HospitalModel.id, HospitalModel.hospital_name).where(
+                    HospitalModel.id.in_(hid_set)
+                )
+            )
+            hospital_map = {r[0]: r[1] for r in hrows.all()}
+
+        start_code = metric["start"]
+        end_code = metric["end"]
+        limit = metric["limit"]
+        detail_rows: list[dict] = []
+        over = invert = missing = 0
+        for cs, detail in zip(cases, details):
+            fd = (detail.form_data or {}) if detail else {}
+            start_raw = fd.get(start_code)
+            end_raw = fd.get(end_code)
+            start = AuditService._parse_time(start_raw)
+            end = AuditService._parse_time(end_raw)
+            if start is None or end is None:
+                missing += 1
+                result = "missing"
+                actual_min = None
+            elif start > end:
+                invert += 1
+                result = "invert"
+                actual_min = round((start - end).total_seconds() / 60, 1)  # 倒挂分钟差（正数）
+            else:
+                actual_min = round((end - start).total_seconds() / 60, 1)
+                if limit is None:
+                    result = "ok"
+                else:
+                    result = "pass" if actual_min <= limit else "over"
+                    if result == "over":
+                        over += 1
+
+            detail_rows.append(
+                {
+                    "case_id": cs.id,
+                    "case_no": cs.case_no,
+                    "patient_name": cs.patient_name,
+                    "hospital_name": hospital_map.get(cs.hospital_id) or "-",
+                    "start_value": start_raw,
+                    "end_value": end_raw,
+                    "actual_min": actual_min,
+                    "result": result,
+                }
+            )
+
+        return {
+            "key": metric["key"],
+            "name": metric["name"],
+            "desc": metric["desc"],
+            "limit": limit,
+            "total": len(detail_rows),
+            "over": over,
+            "invert": invert,
+            "missing": missing,
+            "cases": detail_rows,
         }
 
     async def _case_trend(self, days: int = 30) -> dict:

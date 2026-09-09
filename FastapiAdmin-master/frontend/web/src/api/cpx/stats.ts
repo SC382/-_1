@@ -19,6 +19,33 @@ export interface QcMetric {
   median_min: number | null;
 }
 
+/** 质控指标病例明细行（驾驶舱下钻） */
+export interface QcCaseRow {
+  case_id: number;
+  case_no: string | null;
+  patient_name: string | null;
+  hospital_name: string;
+  start_value: string | null;
+  end_value: string | null;
+  actual_min: number | null;
+  /** pass 达标 / over 超阈值未达标 / invert 时间倒挂 / missing 数据缺失 / ok 无阈值有效 */
+  result: "pass" | "over" | "invert" | "missing" | "ok";
+}
+
+/** 质控指标病例明细（弹窗） */
+export interface QcDetail {
+  key: string;
+  name: string;
+  desc: string;
+  /** 达标阈值（分钟），无阈值指标为 null */
+  limit: number | null;
+  total: number;
+  over: number;
+  invert: number;
+  missing: number;
+  cases: QcCaseRow[];
+}
+
 /** 数据驾驶舱统计结果 */
 export interface DashboardStats {
   hospital_stats: {
@@ -69,6 +96,10 @@ export const CpxStatsAPI = {
   /** 统计分析 */
   analysis() {
     return request<ApiResponse>({ url: `${API_PATH}/analysis`, method: "get" });
+  },
+  /** 质控指标病例明细 */
+  qcDetail(key: string) {
+    return request<ApiResponse<QcDetail>>({ url: `${API_PATH}/qc-detail/${key}`, method: "get" });
   },
 };
 

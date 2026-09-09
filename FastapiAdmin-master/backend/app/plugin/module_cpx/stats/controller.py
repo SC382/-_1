@@ -34,3 +34,14 @@ async def get_analysis_controller(
     service = StatsService(auth, db)
     result = await service.analysis()
     return SuccessResponse(data=result, msg="获取统计分析成功")
+
+
+@StatsRouter.get("/qc-detail/{key}", summary="质控指标病例明细（驾驶舱下钻）")
+async def get_qc_detail_controller(
+    key: str,
+    auth: Annotated[BizAuth, Depends(BusinessRole([ROLE_ADMIN]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    service = StatsService(auth, db)
+    result = await service.qc_detail(key=key)
+    return SuccessResponse(data=result, msg="获取质控明细成功")

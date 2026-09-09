@@ -15,7 +15,12 @@ import {
   Refresh,
   FirstAidKit,
 } from "@element-plus/icons-vue";
-import CpxStatsAPI, { type DashboardStats, type QcMetric } from "@/api/cpx/stats";
+import CpxStatsAPI, {
+  type DashboardStats,
+  type QcCaseRow,
+  type QcDetail,
+  type QcMetric,
+} from "@/api/cpx/stats";
 import { echarts } from "@/plugins/echarts";
 import type { EChartsOption } from "@/plugins/echarts";
 
@@ -197,6 +202,52 @@ function qcColor(m: QcMetric) {
   if (r >= 70) return C.amber;
   return C.red;
 }
+
+// ── 质控下钻：指标卡 → 问题病例明细弹窗 ──
+const qcDetailVisible = ref(false);
+const qcDetailLoading = ref(false);
+const qcDetail = ref<QcDetail | null>(null);
+const qcOnlyAbnormal = ref(true); // 有阈值指标默认只看问题行
+const qcDetailError = ref("");
+
+async function openQcDetail(m: QcMetric) {
+  qcDetail.value = null;
+  qcDetailError.value = "";
+  qcOnlyAbnormal.value = m.limit != null; // 无阈值指标（S2FMC）默认看全部按时长排序
+  qcDetailVisible.value = true;
+  qcDetailLoading.value = true;
+  try {
+    const res = await CpxStatsAPI.qcDetail(m.key);
+    qcDetail.value = res.data.data;
+  } catch {
+    qcDetailError.value = "明细加载失败，请刷新后重试";
+  } finally {
+    qcDetailLoading.value = false;
+  }
+}
+
+/** 有阈值指标：默认仅问题行（over/invert/missing），可切"包含达标" */
+const qcDetailRows = computed<QcCaseRow[]>(() => {
+  const d = qcDetail.value;
+  if (!d) return [];
+  const weight = (r: string) =>
+    r === "over" ? 0 : r === "invert" ? 1 : r === "missing" ? 2 : r === "pass" ? 3 : 0; // ok 与 over 同组排前
+  const arr = [...d.cases].sort((a, b) => {
+    const wa = weight(a.result);
+    const wb = weight(b.result);
+    if (wa !== wb) return wa - wb;
+    return (b.actual_min ?? -1) - (a.actual_min ?? -1);
+  });
+  if (d.limit != null && qcOnlyAbnormal.value) return arr.filter((c) => c.result !== "pass");
+  return arr;
+});
+
+const qcRowTag = (r: string) =>
+  r === "over" ? { text: "未达标", type: "danger" as const }
+  : r === "invert" ? { text: "时间倒挂", type: "warning" as const }
+  : r === "missing" ? { text: "数据缺失", type: "info" as const }
+  : r === "pass" ? { text: "达标", type: "success" as const }
+  : { text: "有效", type: "info" as const };
 
 // ── 图表 ──
 const tooltipStyle = { backgroundColor: "#ffffff", borderColor: C.line, textStyle: { color: C.ink, fontSize: 12 } };
@@ -456,6 +507,7 @@ onBeforeUnmount(() => {
             <template v-if="(qc?.time_issue_cases ?? 0) > 0">
               · <span class="text-red-500">{{ qc?.time_issue_cases }} 例时间倒挂</span>
             </template>
+            · <span class="text-blue-500">点击指标卡查看病例明细</span>
           </span>
         </div>
         <div v-if="!qc?.metrics?.length" class="py-6 text-center text-sm text-gray-400">暂无质控数据</div>
@@ -463,7 +515,9 @@ onBeforeUnmount(() => {
           <div
             v-for="m in qc.metrics"
             :key="m.key"
-            class="rounded-xl bg-white p-4 ring-1 ring-black/5 transition-shadow duration-200 hover:shadow-md"
+            class="group cursor-pointer rounded-xl bg-white p-4 ring-1 ring-black/5 transition-shadow duration-200 hover:shadow-md"
+            title="点击查看该指标病例明细"
+            @click="openQcDetail(m)"
           >
             <div class="flex items-center justify-between gap-1.5">
               <span class="truncate text-xs text-gray-500" :title="`${m.name}：${m.desc}`">{{ m.name }}</span>
@@ -485,9 +539,91 @@ onBeforeUnmount(() => {
               :color="qcColor(m)"
               :show-text="false"
             />
+            <div class="mt-2 text-right text-[10px] text-blue-500 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+              查看明细 →
+            </div>
           </div>
         </div>
       </div>
+
+      <!-- 质控明细弹窗 -->
+      <ElDialog
+        v-model="qcDetailVisible"
+        width="940px"
+        top="6vh"
+        :title="qcDetail ? `${qcDetail.name} · 病例明细` : '病例明细'"
+        append-to-body
+      >
+        <template v-if="qcDetail">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+              <span class="text-gray-400">{{ qcDetail.desc }}</span>
+              <template v-if="qcDetail.limit != null">
+                <span>共 {{ qcDetail.total }} 例</span>
+                <span class="font-medium text-red-500">未达标 {{ qcDetail.over }}</span>
+                <span class="font-medium text-amber-500">倒挂 {{ qcDetail.invert }}</span>
+                <span class="font-medium text-gray-400">缺失 {{ qcDetail.missing }}</span>
+                <span class="font-medium text-emerald-600">达标 {{ qcDetail.total - qcDetail.over - qcDetail.invert - qcDetail.missing }}</span>
+              </template>
+              <template v-else>
+                <span>共 {{ qcDetail.total }} 例</span>
+                <span class="font-medium text-amber-500">倒挂 {{ qcDetail.invert }}</span>
+                <span class="font-medium text-gray-400">缺失 {{ qcDetail.missing }}</span>
+                <span class="font-medium text-gray-600">有效 {{ qcDetail.total - qcDetail.invert - qcDetail.missing }}</span>
+              </template>
+            </div>
+            <div v-if="qcDetail.limit != null" class="flex items-center gap-1.5 text-xs text-gray-500">
+              仅看问题病例
+              <ElSwitch v-model="qcOnlyAbnormal" size="small" />
+            </div>
+          </div>
+
+          <div v-loading="qcDetailLoading" class="qc-detail-body">
+            <div v-if="qcDetailError" class="py-8 text-center text-sm text-red-500">{{ qcDetailError }}</div>
+            <ElTable v-else-if="qcDetailRows.length" :data="qcDetailRows" size="small" height="440" border>
+              <ElTableColumn label="状态" width="96" fixed>
+                <template #default="{ row }">
+                  <ElTag :type="qcRowTag(row.result).type" size="small" disable-transitions>
+                    {{ qcRowTag(row.result).text }}
+                  </ElTag>
+                </template>
+              </ElTableColumn>
+              <ElTableColumn label="医院" min-width="150" prop="hospital_name" show-overflow-tooltip />
+              <ElTableColumn label="患者" width="110">
+                <template #default="{ row }">{{ row.patient_name || "-" }}</template>
+              </ElTableColumn>
+              <ElTableColumn label="病例号" width="150">
+                <template #default="{ row }">
+                  <span class="font-mono text-xs">{{ row.case_no || "-" }}</span>
+                </template>
+              </ElTableColumn>
+              <ElTableColumn label="起止时间节点" min-width="230">
+                <template #default="{ row }">
+                  <div class="text-[11px] leading-4 text-gray-500">
+                    <div>始 {{ row.start_value || "-" }}</div>
+                    <div>终 {{ row.end_value || "-" }}</div>
+                  </div>
+                </template>
+              </ElTableColumn>
+              <ElTableColumn label="实际用时" width="110" align="right">
+                <template #default="{ row }">
+                  <span v-if="row.result === 'invert'" class="text-xs text-amber-500">倒挂</span>
+                  <span v-else-if="row.actual_min != null" class="font-medium tabular-nums text-gray-700">
+                    {{ row.actual_min }} <span class="text-[10px] font-normal text-gray-400">分钟</span>
+                  </span>
+                  <span v-else class="text-gray-300">-</span>
+                </template>
+              </ElTableColumn>
+            </ElTable>
+            <div v-else class="py-10 text-center text-sm text-gray-400">
+              {{ qcOnlyAbnormal && qcDetail.limit != null ? "该指标暂无问题病例，全部达标 🎉" : "该指标暂无可展示的病例" }}
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div v-loading="qcDetailLoading" class="py-12 text-center text-sm text-gray-400">加载中…</div>
+        </template>
+      </ElDialog>
 
       <!-- 趋势 + 审核环图 -->
       <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -554,5 +690,10 @@ onBeforeUnmount(() => {
 }
 .hero {
   background: linear-gradient(135deg, #eff6ff 0%, #eef2ff 55%, #f5f3ff 100%);
+}
+.qc-detail-body {
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 120px;
 }
 </style>
