@@ -239,7 +239,8 @@ async function runOcrFromUrl(url: string, cardType: string) {
 // #ifdef H5
 // ── H5 专属：原生 input 选图（同步 click 保留用户激活，绕开 uni.chooseImage 在异步回调被浏览器拦截）──
 let _h5Input: HTMLInputElement | null = null
-function pickImageH5(onGot: (file: File) => void) {
+/** H5 选图：mode='camera' 时 input 加 capture 直接唤起手机相机（iOS/Android 浏览器均支持）；默认相册 */
+function pickImageH5(onGot: (file: File) => void, mode: 'album' | 'camera' = 'album') {
   if (!_h5Input) {
     _h5Input = document.createElement('input')
     _h5Input.type = 'file'
@@ -247,6 +248,8 @@ function pickImageH5(onGot: (file: File) => void) {
     _h5Input.style.display = 'none'
     document.body.appendChild(_h5Input)
   }
+  if (mode === 'camera') _h5Input.setAttribute('capture', 'environment')
+  else _h5Input.removeAttribute('capture')
   _h5Input.onchange = () => {
     const f = _h5Input!.files?.[0]
     _h5Input!.value = ''
@@ -333,11 +336,16 @@ function aiEntry() {
   uni.showActionSheet({
     itemList: ['证件扫描', '语音输入', '照片拍摄', '本地上传'],
     success: (res) => {
+      if (res.tapIndex === 0) {
+        idCardEntry()
+        return
+      }
       if (res.tapIndex === 1) {
         voiceInput()
         return
       }
-      pickImageH5((file) => uploadH5Compressed(file, (url) => recognizeImage(url)))
+      const mode = res.tapIndex === 2 ? 'camera' : 'album'
+      pickImageH5((file) => uploadH5Compressed(file, (url) => recognizeImage(url)), mode)
     },
   })
   return
@@ -367,11 +375,12 @@ function chooseIdCardSource(cardType: string) {
   // 先把用户选定的证件类型显示出来，再由 OCR / 手动方式填充其余信息
   form.value.id_type = cardType
   // #ifdef H5
-  // H5 无法直调相机 → 相册选图 → canvas 压缩 → 上传 → OCR
+  // H5：拍照（input capture 唤起相机）或相册 → canvas 压缩 → 上传 → OCR
   uni.showActionSheet({
-    itemList: ['从相册选择'],
-    success: () => {
-      pickImageH5((file) => uploadH5Compressed(file, (url) => runOcrFromUrl(url, cardType)))
+    itemList: ['照片拍摄', '从相册选择'],
+    success: (res) => {
+      const mode = res.tapIndex === 0 ? 'camera' : 'album'
+      pickImageH5((file) => uploadH5Compressed(file, (url) => runOcrFromUrl(url, cardType)), mode)
     },
   })
   return
