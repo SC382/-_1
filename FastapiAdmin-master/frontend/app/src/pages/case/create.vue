@@ -119,6 +119,8 @@ function normalizeIdType(v: string): string {
   if (!s) return s
   if (/身份证|居民身份证|二代身份证|居民身分证/.test(s)) return '身份证'
   if (/医保|医疗保险|医疗保险卡|社保卡|社会保障卡/.test(s)) return '医保卡'
+  // AI 视觉模型常把身份证卡面号码栏的印刷标题「公民身份号码」误判为证件类型 → 归为身份证
+  if (/公民身份号码|身份证号码|证件号码/.test(s)) return '身份证'
   return s
 }
 
@@ -166,18 +168,36 @@ function uploadToServer(filePath: string, onSuccess: (url: string) => void) {
   })
 }
 
-/** 图片识别：上传 → 后端通义千问 Vision → 回填 */
+/** 识别前压缩（App 端）：手机原图 2-8MB → 长边 ≤1600、质量 70，上传与 AI 识别更快；压缩失败自动回退原图 */
+function compressForAI(filePath: string, cb: (p: string) => void) {
+  // #ifndef H5
+  uni.compressImage({
+    src: filePath,
+    quality: 70,
+    compressedWidth: 1600,
+    success: (res) => cb(res.tempFilePath || filePath),
+    fail: () => cb(filePath),
+  })
+  // #endif
+  // #ifdef H5
+  cb(filePath)
+  // #endif
+}
+
+/** 图片识别：压缩 → 上传 → 后端视觉模型识别 → 回填 */
 function recognizeFromImage(filePath: string) {
   uni.showLoading({ title: 'AI 识别中...' })
-  uploadToServer(filePath, async (url) => {
-    try {
-      const result = await http.Post('/cpx/doctor/ai/recognize', { image_url: url }) as Record<string, string>
-      fillFromRecognized(result)
-    }
-    catch {
-      uni.hideLoading()
-      uni.showToast({ title: 'AI 识别失败，请重试', icon: 'none' })
-    }
+  compressForAI(filePath, (compressed) => {
+    uploadToServer(compressed, async (url) => {
+      try {
+        const result = await http.Post('/cpx/doctor/ai/recognize', { image_url: url }) as Record<string, string>
+        fillFromRecognized(result)
+      }
+      catch {
+        uni.hideLoading()
+        uni.showToast({ title: 'AI 识别失败，请重试', icon: 'none' })
+      }
+    })
   })
 }
 
@@ -305,6 +325,17 @@ function chooseIdCardSource(cardType: string) {
 // ── 语音输入：App 端真实录音 → 后端 ASR 转写 → AI 解析回填；H5 无原生录音 → 文本降级 ──
 let recorderManager: any = null
 let recordingVoice = false
+/** 录音悬浮条状态（App 端）：录音中常驻"正在录音…点击结束"，不再需要再走一遍菜单结束 */
+const voiceActive = ref(false)
+const voiceSeconds = ref(0)
+let voiceTimer: any = null
+
+function clearVoiceTimer() {
+  if (voiceTimer) {
+    clearInterval(voiceTimer)
+    voiceTimer = null
+  }
+}
 
 function voiceInput() {
   // #ifdef H5
@@ -319,9 +350,9 @@ function voiceInput() {
   })
   // #endif
   // #ifndef H5
-  // 第一次点击 = 开始录音；录音中再次点击 = 结束并转写
+  // 点击即开始录音；录音中点菜单项不重复开始，引导点击底部悬浮条结束
   if (!recordingVoice) startVoiceRecord()
-  else stopVoiceRecord()
+  else uni.showToast({ title: '正在录音，点击屏幕下方录音条结束', icon: 'none' })
   // #endif
 }
 
@@ -331,6 +362,8 @@ function ensureVoiceRecorder() {
   if (!rm) return null
   rm.onStop((res: any) => {
     recordingVoice = false
+    voiceActive.value = false
+    clearVoiceTimer()
     uni.hideLoading()
     const fs = uni.getFileSystemManager()
     fs.readFile({
@@ -369,6 +402,8 @@ function ensureVoiceRecorder() {
   })
   rm.onError(() => {
     recordingVoice = false
+    voiceActive.value = false
+    clearVoiceTimer()
     uni.hideLoading()
     uni.showToast({ title: '录音失败，请重试', icon: 'none' })
   })
@@ -383,11 +418,23 @@ function startVoiceRecord() {
     return
   }
   recordingVoice = true
+  voiceActive.value = true
+  voiceSeconds.value = 0
+  clearVoiceTimer()
+  voiceTimer = setInterval(() => {
+    voiceSeconds.value += 1
+    // 60 秒上限自动结束，避免无限录音
+    if (voiceSeconds.value >= 60) {
+      uni.showToast({ title: '已达 60 秒上限，自动结束', icon: 'none' })
+      stopVoiceRecord()
+    }
+  }, 1000)
   rm.start({ format: 'mp3', sampleRate: 16000 })
-  uni.showToast({ title: '开始录音，说完后再次点击"语音输入"结束', icon: 'none', duration: 3000 })
+  uni.showToast({ title: '开始录音，点击屏幕下方录音条结束', icon: 'none', duration: 2000 })
 }
 
 function stopVoiceRecord() {
+  clearVoiceTimer()
   if (recorderManager) recorderManager.stop()
 }
 
@@ -680,6 +727,14 @@ async function handleCreate() {
         {{ submitting ? '保存中...' : '保存' }}
       </button>
     </view>
+
+    <!-- 录音悬浮条（App 端录音中常驻）：点击即结束并转写 -->
+    <!-- #ifndef H5 -->
+    <view v-if="voiceActive" class="voice-bar" @click="stopVoiceRecord">
+      <view class="voice-dot" />
+      <text class="voice-text">正在录音 {{ voiceSeconds }}s，点击结束</text>
+    </view>
+    <!-- #endif -->
   </view>
 </template>
 
@@ -876,4 +931,35 @@ async function handleCreate() {
 }
 .save-btn::after { border: none; }
 .save-btn[disabled] { opacity: 0.6; }
+
+/* 录音悬浮条：底部居中，录音中点击结束 */
+.voice-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 60rpx;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 22rpx 44rpx;
+  border-radius: 60rpx;
+  background: rgba(29, 78, 216, 0.95);
+  box-shadow: 0 8rpx 24rpx rgba(29, 78, 216, 0.35);
+}
+.voice-dot {
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  background: #f87171;
+  animation: voiceBlink 1s ease-in-out infinite;
+}
+@keyframes voiceBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.voice-text {
+  color: #ffffff;
+  font-size: 28rpx;
+}
 </style>

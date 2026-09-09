@@ -544,6 +544,22 @@ function uploadToServer(filePath: string, onSuccess: (url: string) => void) {
   })
 }
 
+/** 识别前压缩（App 端）：手机原图 → 长边 ≤1600、质量 70，上传与 AI 识别更快；失败自动回退原图 */
+function compressForAIFill(filePath: string, cb: (p: string) => void) {
+  // #ifndef H5
+  uni.compressImage({
+    src: filePath,
+    quality: 70,
+    compressedWidth: 1600,
+    success: (res) => cb(res.tempFilePath || filePath),
+    fail: () => cb(filePath),
+  })
+  // #endif
+  // #ifdef H5
+  cb(filePath)
+  // #endif
+}
+
 /** 证件识别（拍照/选择图片 → 上传 → 自动填入当前 Tab 的图片字段） */
 function idCardEntry() {
   if (!ensureOnline('证件识别'))
@@ -599,21 +615,23 @@ function aiEntry() {
     itemList: ['图片识别', '语音识别'],
     success: (res) => {
       if (res.tapIndex === 0) {
-        // 图片识别：拍照/选择 → 上传 → 调用后端 AI Vision 接口 → 回填
+        // 图片识别：拍照/选择 → 压缩 → 上传 → 调用后端 AI Vision 接口 → 回填
         uni.chooseImage({
           count: 1,
           sourceType: ['camera', 'album'],
           success: (chooseRes) => {
             uni.showLoading({ title: 'AI 识别中...' })
-            uploadToServer(chooseRes.tempFilePaths[0], async (url) => {
-              try {
-                const result = await http.Post('/cpx/doctor/ai/recognize', { image_url: url }) as Record<string, string>
-                fillFormData(result)
-              }
-              catch {
-                uni.hideLoading()
-                uni.showToast({ title: 'AI 识别失败，请重试', icon: 'none' })
-              }
+            compressForAIFill(chooseRes.tempFilePaths[0], (p) => {
+              uploadToServer(p, async (url) => {
+                try {
+                  const result = await http.Post('/cpx/doctor/ai/recognize', { image_url: url }) as Record<string, string>
+                  fillFormData(result)
+                }
+                catch {
+                  uni.hideLoading()
+                  uni.showToast({ title: 'AI 识别失败，请重试', icon: 'none' })
+                }
+              })
             })
           },
         })
@@ -629,6 +647,17 @@ function aiEntry() {
 // ── 语音识别：App 端真实录音 → ASR 转写 → AI 解析回填；H5 用 Web Speech，不支持则手动输入 ──
 let voiceRecorder: any = null
 let voiceRecording = false
+/** 录音悬浮条状态（App 端）：录音中常驻"正在录音…点击结束"，不再需要再走一遍菜单结束 */
+const voiceActive = ref(false)
+const voiceSeconds = ref(0)
+let voiceTimer: any = null
+
+function clearVoiceTimerFill() {
+  if (voiceTimer) {
+    clearInterval(voiceTimer)
+    voiceTimer = null
+  }
+}
 
 function startVoiceRecognition() {
   // #ifdef H5
@@ -660,9 +689,9 @@ function startVoiceRecognition() {
   return
   // #endif
   // #ifndef H5
-  // 真录音：第一次点「语音识别」开始录音；录音中再次点一次即结束并转写
+  // 点击即开始录音；录音中再点菜单项不重复开始，引导点击底部悬浮条结束
   if (!voiceRecording) startVoiceRecordFill()
-  else stopVoiceRecordFill()
+  else uni.showToast({ title: '正在录音，点击屏幕下方录音条结束', icon: 'none' })
   // #endif
 }
 
@@ -672,6 +701,8 @@ function ensureVoiceRecorderFill() {
   if (!rm) return null
   rm.onStop((res: any) => {
     voiceRecording = false
+    voiceActive.value = false
+    clearVoiceTimerFill()
     uni.hideLoading()
     const fs = uni.getFileSystemManager()
     fs.readFile({
@@ -720,6 +751,8 @@ function ensureVoiceRecorderFill() {
   })
   rm.onError(() => {
     voiceRecording = false
+    voiceActive.value = false
+    clearVoiceTimerFill()
     uni.hideLoading()
     uni.showToast({ title: '录音失败，请重试', icon: 'none' })
   })
@@ -734,11 +767,23 @@ function startVoiceRecordFill() {
     return
   }
   voiceRecording = true
+  voiceActive.value = true
+  voiceSeconds.value = 0
+  clearVoiceTimerFill()
+  voiceTimer = setInterval(() => {
+    voiceSeconds.value += 1
+    // 60 秒上限自动结束，避免无限录音
+    if (voiceSeconds.value >= 60) {
+      uni.showToast({ title: '已达 60 秒上限，自动结束', icon: 'none' })
+      stopVoiceRecordFill()
+    }
+  }, 1000)
   rm.start({ format: 'mp3', sampleRate: 16000 })
-  uni.showToast({ title: '开始录音，说完后再次选择"语音识别"结束', icon: 'none', duration: 3000 })
+  uni.showToast({ title: '开始录音，点击屏幕下方录音条结束', icon: 'none', duration: 2000 })
 }
 
 function stopVoiceRecordFill() {
+  clearVoiceTimerFill()
   if (voiceRecorder) voiceRecorder.stop()
 }
 
@@ -780,6 +825,15 @@ function fillFormData(info: Record<string, string>) {
     chief_complaint: 'chief_complaint', '主诉': 'chief_complaint',
     diagnose_type: 'diagnose_type', '诊断': 'diagnose_type', '诊断类型': 'diagnose_type',
   }
+  // 证件类型归一化兜底：AI 视觉模型常把身份证卡面号码栏标题「公民身份号码」误判为证件类型
+  function normCard(v: string): string {
+    const s = String(v).trim()
+    if (!s) return s
+    if (/身份证|居民身份证|二代身份证|居民身分证/.test(s)) return '身份证'
+    if (/医保|医疗保险|医疗保险卡|社保卡|社会保障卡/.test(s)) return '医保卡'
+    if (/公民身份号码|身份证号码|证件号码/.test(s)) return '身份证'
+    return s
+  }
   // 模板实际存在的 field_code 集合：模型若直接返回标准编码（如 fmc_time）可精准命中
   const tplCodes = new Set((tplFields.value || []).map((f: any) => f.field_code))
   let filled = 0
@@ -790,7 +844,7 @@ function fillFormData(info: Record<string, string>) {
     let code = fieldAlias[k] || fieldAlias[String(k).trim()]
     if (!code && tplCodes.has(k)) code = k
     if (code && formData[code] !== undefined) {
-      formData[code] = v
+      formData[code] = (code === 'card_type' || code === 'id_type') ? normCard(v) : v
       filled++
       details.push(`${code}=${v}`)
     }
@@ -999,6 +1053,14 @@ function fillFormData(info: Record<string, string>) {
 
     <view v-else class="loading">病例不存在或已删除</view>
     </view>
+
+    <!-- 录音悬浮条（App 端录音中常驻）：点击即结束并转写 -->
+    <!-- #ifndef H5 -->
+    <view v-if="voiceActive" class="voice-bar" @click="stopVoiceRecordFill">
+      <view class="voice-dot" />
+      <text class="voice-text">正在录音 {{ voiceSeconds }}s，点击结束</text>
+    </view>
+    <!-- #endif -->
   </view>
 </template>
 
@@ -1248,4 +1310,34 @@ function fillFormData(info: Record<string, string>) {
 .op-next { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; }
 .op-submit { background: #1d4ed8; color: #ffffff; }
 .op-btn[disabled] { opacity: 0.6; }
+/* ── 录音悬浮条：底部居中，录音中点击结束 ── */
+.voice-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 60rpx;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 22rpx 44rpx;
+  border-radius: 60rpx;
+  background: rgba(29, 78, 216, 0.95);
+  box-shadow: 0 8rpx 24rpx rgba(29, 78, 216, 0.35);
+}
+.voice-dot {
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  background: #f87171;
+  animation: voiceBlink 1s ease-in-out infinite;
+}
+@keyframes voiceBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.voice-text {
+  color: #ffffff;
+  font-size: 28rpx;
+}
 </style>
