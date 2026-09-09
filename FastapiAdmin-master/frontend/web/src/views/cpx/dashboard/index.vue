@@ -15,7 +15,7 @@ import {
   Refresh,
   FirstAidKit,
 } from "@element-plus/icons-vue";
-import CpxStatsAPI, { type DashboardStats } from "@/api/cpx/stats";
+import CpxStatsAPI, { type DashboardStats, type QcMetric } from "@/api/cpx/stats";
 import { echarts } from "@/plugins/echarts";
 import type { EChartsOption } from "@/plugins/echarts";
 
@@ -178,6 +178,25 @@ const overviewRows = computed(() => [
     desc: `今日新增 ${s.value?.case_stats.today ?? 0} 份病例`,
   },
 ]);
+
+// ── 质控指标 ──
+const qc = computed(() => stats.value?.qc_stats ?? null);
+function qcMainText(m: QcMetric) {
+  if (m.rate != null) return `${m.rate}%`;
+  if (m.median_min != null) return `${m.median_min}`;
+  return "--";
+}
+function qcSubText(m: QcMetric) {
+  if (m.rate != null) return `达标 ${m.pass}/${m.eligible} · ≤${m.limit} 分钟`;
+  return `中位时长 · 无阈值`;
+}
+function qcColor(m: QcMetric) {
+  const r = m.rate;
+  if (r == null) return C.blue;
+  if (r >= 90) return C.green;
+  if (r >= 70) return C.amber;
+  return C.red;
+}
 
 // ── 图表 ──
 const tooltipStyle = { backgroundColor: "#ffffff", borderColor: C.line, textStyle: { color: C.ink, fontSize: 12 } };
@@ -422,6 +441,50 @@ onBeforeUnmount(() => {
               <span class="font-medium tabular-nums text-red-500">{{ s?.audit_stats.reject_rate ?? 0 }}%</span>
             </div>
             <ElProgress :percentage="s?.audit_stats.reject_rate ?? 0" :stroke-width="6" color="#DC2626" :show-text="false" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 胸痛质控指标 -->
+      <div class="mt-4 rounded-2xl bg-[#F4F8FC] p-5 shadow-sm ring-1 ring-black/5">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 class="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+            <ElIcon :size="14" color="#DC2626"><FirstAidKit /></ElIcon>胸痛质控指标
+          </h3>
+          <span class="text-xs text-gray-400">
+            纳入已上报 {{ qc?.case_total ?? 0 }} 例
+            <template v-if="(qc?.time_issue_cases ?? 0) > 0">
+              · <span class="text-red-500">{{ qc?.time_issue_cases }} 例时间倒挂</span>
+            </template>
+          </span>
+        </div>
+        <div v-if="!qc?.metrics?.length" class="py-6 text-center text-sm text-gray-400">暂无质控数据</div>
+        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div
+            v-for="m in qc.metrics"
+            :key="m.key"
+            class="rounded-xl bg-white p-4 ring-1 ring-black/5 transition-shadow duration-200 hover:shadow-md"
+          >
+            <div class="flex items-center justify-between gap-1.5">
+              <span class="truncate text-xs text-gray-500" :title="`${m.name}：${m.desc}`">{{ m.name }}</span>
+              <span class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">{{ m.key }}</span>
+            </div>
+            <div class="mt-2.5 flex items-baseline gap-1">
+              <span class="text-2xl font-semibold leading-none tabular-nums" :style="{ color: qcColor(m) }">
+                {{ qcMainText(m) }}
+              </span>
+              <span v-if="m.rate != null" class="text-xs text-gray-400">达标率</span>
+              <span v-else class="text-xs text-gray-400">分钟（中位）</span>
+            </div>
+            <div class="mt-1.5 truncate text-xs text-gray-400" :title="qcSubText(m)">{{ qcSubText(m) }}</div>
+            <ElProgress
+              v-if="m.rate != null"
+              class="mt-2.5"
+              :percentage="m.rate ?? 0"
+              :stroke-width="5"
+              :color="qcColor(m)"
+              :show-text="false"
+            />
           </div>
         </div>
       </div>

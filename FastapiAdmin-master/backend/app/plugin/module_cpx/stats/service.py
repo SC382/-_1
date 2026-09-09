@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.plugin.module_cpx.auth.dependencies import BizAuth
 from app.plugin.module_cpx.audit.service import AuditService
+from app.plugin.module_cpx.fields import QUALITY_METRICS
 from app.plugin.module_cpx.models import (
     AuditRecordModel,
     CaseDetailModel,
@@ -107,6 +108,69 @@ class StatsService:
             "case_trend": trend,
             "case_trend_monthly": trend_monthly,
             "hospital_ranking": ranking,
+            "qc_stats": await self._qc_stats(),
+        }
+
+    async def _qc_stats(self) -> dict:
+        """胸痛质控聚合：对已上报病例按 QUALITY_METRICS 计算达标率与时长（form_data 经 ORM 自动解密）。"""
+        rows = await self.db.execute(
+            select(CaseRecordModel).where(CaseRecordModel.status.in_(["submitted", "approved", "rejected"]))
+        )
+        cases = rows.scalars().all()
+
+        # 预取各病例表单数据
+        detail_map: dict[int, dict] = {}
+        for cs in cases:
+            detail = (
+                await self.db.execute(select(CaseDetailModel).where(CaseDetailModel.case_id == cs.id))
+            ).scalars().first()
+            detail_map[cs.id] = (detail.form_data or {}) if detail else {}
+
+        metric_rows: list[dict] = []
+        abnormal_case_ids: set[int] = set()
+        for m in QUALITY_METRICS:
+            durations: list[float] = []
+            pass_count = 0
+            eligible = 0
+            for cs in cases:
+                fd = detail_map.get(cs.id, {})
+                start = AuditService._parse_time(fd.get(m["start"]))
+                end = AuditService._parse_time(fd.get(m["end"]))
+                if start is None or end is None:
+                    continue
+                if start > end:  # 时间倒挂：不计入达标评估
+                    abnormal_case_ids.add(cs.id)
+                    continue
+                minutes = round((end - start).total_seconds() / 60, 1)
+                durations.append(minutes)
+                eligible += 1
+                if m["limit"] is not None and minutes <= m["limit"]:
+                    pass_count += 1
+
+            ordered = sorted(durations)
+            size = len(ordered)
+            median = round((ordered[size // 2] if size % 2 else (ordered[size // 2 - 1] + ordered[size // 2]) / 2), 1) if size else None
+            avg = round(sum(ordered) / size, 1) if size else None
+            rate = round(pass_count / eligible * 100, 1) if eligible and m["limit"] is not None else None
+
+            metric_rows.append(
+                {
+                    "key": m["key"],
+                    "name": m["name"],
+                    "desc": m["desc"],
+                    "limit": m["limit"],
+                    "eligible": eligible,
+                    "pass": pass_count,
+                    "rate": rate,
+                    "avg_min": avg,
+                    "median_min": median,
+                }
+            )
+
+        return {
+            "case_total": len(cases),
+            "time_issue_cases": len(abnormal_case_ids),
+            "metrics": metric_rows,
         }
 
     async def _case_trend(self, days: int = 30) -> dict:
