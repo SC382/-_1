@@ -35,6 +35,12 @@ export default defineManifestConfig({
       Geolocation: {
         description: '定位',
       },
+      Camera: {
+        description: '相机',
+      },
+      Record: {
+        description: '录音',
+      },
     },
     /* 应用发布信息 */
     distribute: {
