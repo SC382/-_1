@@ -23,12 +23,21 @@ const scrollRef = ref<HTMLDivElement>()
 const recording = ref(false)
 const transcribing = ref(false)
 let recorderManager: any = null
+let recordTimer: ReturnType<typeof setInterval> | null = null
+
+function clearRecordTimer() {
+  if (recordTimer) {
+    clearInterval(recordTimer)
+    recordTimer = null
+  }
+}
 
 function ensureRecorder() {
   if (recorderManager) return recorderManager
   const rm: any = uni.getRecorderManager()
   if (!rm) return null
   rm.onStop((res: any) => {
+    clearRecordTimer()
     recording.value = false
     uni.getFileSystemManager().readFile({
       filePath: res.tempFilePath,
@@ -49,6 +58,7 @@ function ensureRecorder() {
     })
   })
   rm.onError(() => {
+    clearRecordTimer()
     recording.value = false
     uni.showToast({ title: '录音失败', icon: 'none' })
   })
@@ -66,8 +76,25 @@ function toggleRecord() {
     uni.showToast({ title: '当前环境不支持录音', icon: 'none' })
     return
   }
-  if (recording.value) rm.stop()
-  else { recording.value = true; rm.start({ format: 'mp3', sampleRate: 16000 }) }
+  if (recording.value) {
+    clearRecordTimer()
+    rm.stop()
+  }
+  else {
+    recording.value = true
+    clearRecordTimer()
+    // 28 秒上限自动结束（智谱 ASR 单次音频硬限制 30 秒，留 2 秒余量）
+    let sec = 0
+    recordTimer = setInterval(() => {
+      sec += 1
+      if (sec >= 28) {
+        clearRecordTimer()
+        uni.showToast({ title: '已达 28 秒上限，自动结束', icon: 'none' })
+        rm.stop()
+      }
+    }, 1000)
+    rm.start({ format: 'mp3', sampleRate: 16000 })
+  }
 }
 
 // 问心推荐问题（参考"胸痛中心认证帮扶"高频问题）
@@ -170,6 +197,7 @@ function onClearChat() {
 
 onUnmounted(() => {
   stopTyping()
+  clearRecordTimer()
   if (recording.value && recorderManager) recorderManager.stop()
 })
 </script>

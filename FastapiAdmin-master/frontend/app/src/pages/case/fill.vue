@@ -790,9 +790,9 @@ function startVoiceRecordFill() {
   clearVoiceTimerFill()
   voiceTimer = setInterval(() => {
     voiceSeconds.value += 1
-    // 60 秒上限自动结束，避免无限录音
-    if (voiceSeconds.value >= 60) {
-      uni.showToast({ title: '已达 60 秒上限，自动结束', icon: 'none' })
+    // 28 秒上限自动结束（智谱 ASR 单次音频硬限制 30 秒，留 2 秒余量）
+    if (voiceSeconds.value >= 28) {
+      uni.showToast({ title: '已达 28 秒上限，自动结束', icon: 'none' })
       stopVoiceRecordFill()
     }
   }, 1000)
