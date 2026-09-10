@@ -1,7 +1,7 @@
 <!-- 患者建档（基本信息）：蓝色自定义导航栏 + 白底表单 + 通栏深蓝保存按钮 -->
 <script setup lang="ts">
 import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import DoctorAPI, { type DoctorTemplate } from '@/api/module_cpx/doctor'
 import { useUserStore } from '@/store/userStore'
 import { http, getApiBaseUrl } from '@/http'
@@ -63,6 +63,24 @@ onLoad(async () => {
   }
   catch {
     // http 层 toast
+  }
+})
+
+// 离开页面：丢弃未完成回调、停录音、收起面板
+onUnload(() => {
+  voiceDisposed = true
+  voiceStopRequested = true
+  voiceFinished = true
+  voiceAwaitingStop = false
+  clearVoiceTimer()
+  clearVoiceFallback()
+  recordingVoice = false
+  voiceActive.value = false
+  voicePanel.value = false
+  voicePanelRecording.value = false
+  if (recorderManager) {
+    try { recorderManager.stop() }
+    catch { /* 忽略：可能未在录音 */ }
   }
 })
 
@@ -422,6 +440,14 @@ const voiceSeconds = ref(0)
 const voiceSegNo = ref(1)
 /** 已转写累计字数（仅用于展示） */
 const voiceChars = ref(0)
+/** 底部语音面板是否展开（录音中 + 转写结果两态都用它） */
+const voicePanel = ref(false)
+/** 面板是否处于「录音中」（false = 已结束，展示文字框） */
+const voicePanelRecording = ref(false)
+/** 转写结果文字框内容（可编辑） */
+const voicePanelText = ref('')
+/** 是否未识别到任何文字（用于文字框内灰字提示） */
+const voiceNoResult = ref(false)
 let voiceTimer: any = null
 let voiceStopFallback: any = null
 /** 各段转写文本，下标 = 段下标（0 起），保证按口述顺序拼接 */
@@ -605,29 +631,37 @@ function checkVoiceFinish() {
   finishVoiceRecord()
 }
 
-/** 结算：按段号顺序拼接全部文本 → 人工确认 → AI 解析回填 */
+/** 结算：按段号顺序拼接全部文本 → 落入底部面板文字框（用户可编辑后确认解析） */
 function finishVoiceRecord() {
   const joined = voiceSegments.filter(Boolean).join('').trim()
-  if (!joined) {
-    uni.showToast({
-      title: voiceSegFailed.length ? '语音识别失败，请重试' : '未识别到内容，请重试',
-      icon: 'none',
-    })
-    return
-  }
-  if (voiceSegFailed.length) {
+  voicePanelRecording.value = false
+  voicePanel.value = true
+  voicePanelText.value = joined
+  voiceNoResult.value = !joined
+  if (joined && voiceSegFailed.length) {
     uni.showToast({ title: `第 ${voiceSegFailed.join('、')} 段识别失败，其余已合并`, icon: 'none', duration: 2500 })
   }
-  const okSegs = voiceSegments.filter(Boolean).length
-  // 转写文本可编辑确认 → AI 解析回填
-  uni.showModal({
-    title: `识别内容确认（共 ${okSegs} 段）`,
-    editable: true,
-    content: joined,
-    success: (m) => {
-      if (m.confirm && m.content) recognizeFromText(m.content)
-    },
-  })
+}
+
+/** 关闭底部语音面板（放弃本轮结果） */
+function closeVoicePanel() {
+  voicePanel.value = false
+  voicePanelRecording.value = false
+  voicePanelText.value = ''
+  voiceNoResult.value = false
+  voiceSegments = []
+  voiceSegFailed = []
+}
+
+/** 确认面板文字 → AI 解析回填 */
+function confirmVoicePanel() {
+  const t = voicePanelText.value.trim()
+  if (!t) {
+    uni.showToast({ title: '没有识别到语音', icon: 'none' })
+    return
+  }
+  closeVoicePanel()
+  recognizeFromText(t)
 }
 
 function startVoiceRecord() {
@@ -648,8 +682,13 @@ function startVoiceRecord() {
   voiceDisposed = false
   recordingVoice = true
   voiceActive.value = true
+  // 展开底部面板并进入录音态
+  voicePanel.value = true
+  voicePanelRecording.value = true
+  voicePanelText.value = ''
+  voiceNoResult.value = false
   beginVoiceSegment()
-  uni.showToast({ title: '开始录音，点击屏幕下方录音条结束', icon: 'none', duration: 2000 })
+  uni.showToast({ title: '开始录音，说完点击下方录音条结束', icon: 'none', duration: 2500 })
 }
 
 function stopVoiceRecord() {
@@ -657,6 +696,9 @@ function stopVoiceRecord() {
   voiceStopRequested = true
   clearVoiceTimer()
   voiceAwaitingStop = true
+  // 面板仍保持展开，等转写回来后原位变成文字框
+  voicePanelRecording.value = false
+  uni.showLoading({ title: '整理识别结果...' })
   if (recorderManager) recorderManager.stop()
   armVoiceStopFallback()
 }
@@ -956,11 +998,38 @@ async function handleCreate() {
       </button>
     </view>
 
-    <!-- 录音悬浮条（App 端整轮录音期间常驻）：显示段号/秒数/已识别字数，点击结束整轮 -->
+    <!-- 语音面板（App 端）：录音态显示段号/秒数/已识别字数；结束后原位变文字框 -->
     <!-- #ifndef H5 -->
-    <view v-if="voiceActive" class="voice-bar" @click="stopVoiceRecord">
-      <view class="voice-dot" />
-      <text class="voice-text">第 {{ voiceSegNo }} 段 {{ voiceSeconds }}s · 已识别 {{ voiceChars }} 字，点击结束</text>
+    <view v-if="voicePanel" class="voice-panel">
+      <!-- 录音态 -->
+      <template v-if="voicePanelRecording">
+        <view class="vp-head">
+          <view class="voice-dot" />
+          <text class="vp-title">正在录音 · 第 {{ voiceSegNo }} 段 {{ voiceSeconds }}s</text>
+          <text class="vp-count">已识别 {{ voiceChars }} 字</text>
+        </view>
+        <view class="vp-stop" @click="stopVoiceRecord">点击结束</view>
+      </template>
+      <!-- 结果态：文字框 -->
+      <template v-else>
+        <view class="vp-head">
+          <text class="vp-title">{{ voiceNoResult ? '语音识别结果' : '识别完成，可修改后确认' }}</text>
+          <text class="vp-close" @click="closeVoicePanel">✕</text>
+        </view>
+        <textarea
+          v-model="voicePanelText"
+          class="vp-textarea"
+          :class="{ empty: voiceNoResult }"
+          :placeholder="voiceNoResult ? '没有识别到语音' : ''"
+          placeholder-class="vp-ph"
+          auto-height
+          :maxlength="-1"
+        />
+        <view class="vp-actions">
+          <button class="vp-btn vp-again" @click="startVoiceRecord">重新录音</button>
+          <button class="vp-btn vp-ok" :disabled="voiceNoResult" @click="confirmVoicePanel">确认识别</button>
+        </view>
+      </template>
     </view>
     <!-- #endif -->
   </view>
@@ -1160,21 +1229,87 @@ async function handleCreate() {
 .save-btn::after { border: none; }
 .save-btn[disabled] { opacity: 0.6; }
 
-/* 录音悬浮条：底部居中，录音中点击结束 */
-.voice-bar {
+/* 语音面板：底部卡片，录音态 → 结果态（文字框）原位切换 */
+.voice-panel {
   position: fixed;
-  left: 50%;
-  bottom: 60rpx;
-  transform: translateX(-50%);
+  left: 32rpx;
+  right: 32rpx;
+  bottom: 40rpx;
   z-index: 999;
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 28rpx 32rpx 24rpx;
+  box-shadow: 0 12rpx 40rpx rgba(15, 23, 42, 0.18);
+  border: 2rpx solid #e5e7eb;
+}
+.vp-head {
   display: flex;
   align-items: center;
-  gap: 14rpx;
-  padding: 22rpx 44rpx;
-  border-radius: 60rpx;
-  background: rgba(29, 78, 216, 0.95);
-  box-shadow: 0 8rpx 24rpx rgba(29, 78, 216, 0.35);
+  gap: 12rpx;
+  margin-bottom: 20rpx;
 }
+.vp-title {
+  flex: 1;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1e293b;
+}
+.vp-count {
+  font-size: 24rpx;
+  color: #2563eb;
+}
+.vp-close {
+  font-size: 32rpx;
+  color: #94a3b8;
+  padding: 0 8rpx;
+}
+.vp-stop {
+  padding: 20rpx 0;
+  text-align: center;
+  border-radius: 16rpx;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+.vp-textarea {
+  width: 100%;
+  min-height: 160rpx;
+  max-height: 420rpx;
+  padding: 20rpx 24rpx;
+  box-sizing: border-box;
+  background: #f8fafc;
+  border: 2rpx solid #e5e7eb;
+  border-radius: 16rpx;
+  font-size: 28rpx;
+  line-height: 1.6;
+  color: #0f172a;
+}
+.vp-textarea.empty { color: #94a3b8; }
+.vp-ph { color: #94a3b8; }
+.vp-actions {
+  display: flex;
+  gap: 20rpx;
+  margin-top: 24rpx;
+}
+.vp-btn {
+  flex: 1;
+  height: 84rpx;
+  line-height: 84rpx;
+  font-size: 30rpx;
+  border-radius: 16rpx;
+  margin: 0;
+}
+.vp-btn::after { border: none; }
+.vp-again {
+  background: #f1f5f9;
+  color: #334155;
+}
+.vp-ok {
+  background: #2563eb;
+  color: #ffffff;
+}
+.vp-ok[disabled] { opacity: 0.45; }
 .voice-dot {
   width: 18rpx;
   height: 18rpx;
@@ -1185,9 +1320,5 @@ async function handleCreate() {
 @keyframes voiceBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
-}
-.voice-text {
-  color: #ffffff;
-  font-size: 28rpx;
 }
 </style>
