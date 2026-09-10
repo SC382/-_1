@@ -1,7 +1,7 @@
 <!-- 数据直报：病例编辑（模板驱动的动态表单，分类与字段由 caseDetail.fields 提供） -->
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { onLoad, onShow } from '@dcloudio/uni-app'
+import { onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import DoctorAPI, { type TemplateField, type EcgConsultItem } from '@/api/module_cpx/doctor'
 import { useUserStore } from '@/store/userStore'
 import { http, getApiBaseUrl } from '@/http'
@@ -660,19 +660,72 @@ function aiEntry() {
 }
 
 // ── 语音识别：App 端真实录音 → ASR 转写 → AI 解析回填；H5 用 Web Speech，不支持则手动输入 ──
+// 智谱 ASR 单次音频硬限制 30 秒（错误码 1214），故每段录满 28 秒自动切段续录：
+// 用户一直说到说完，各段文字按段号顺序拼接成完整文本，再交给 AI 解析。
 let voiceRecorder: any = null
 let voiceRecording = false
-/** 录音悬浮条状态（App 端）：录音中常驻"正在录音…点击结束"，不再需要再走一遍菜单结束 */
+/** 录音悬浮条状态（App 端）：整轮录音期间常驻，点击结束整轮 */
 const voiceActive = ref(false)
+/** 当前段已录秒数 */
 const voiceSeconds = ref(0)
+/** 当前段号（从 1 起，仅用于展示） */
+const voiceSegNo = ref(1)
+/** 已转写累计字数（仅用于展示） */
+const voiceChars = ref(0)
 let voiceTimer: any = null
 let voiceStopFallbackFill: any = null
+/** 各段转写文本，下标 = 段下标（0 起），保证按口述顺序拼接 */
+let voiceSegments: string[] = []
+/** 识别失败的段号（从 1 起），用于最终提示 */
+let voiceSegFailed: number[] = []
+/** 当前段下标（0 起） */
+let voiceSegIndex = 0
+/** 在途转写请求数 */
+let voicePending = 0
+/** 用户已点击结束，不再续录 */
+let voiceStopRequested = false
+/** 本轮是否已结算，防止重复弹窗 */
+let voiceFinished = false
+/** 已调用 stop()、等待 onStop 回调（同时用于拦截重复回调） */
+let voiceAwaitingStop = false
+/** 页面已卸载，丢弃后续回调 */
+let voiceDisposed = false
 
 function clearVoiceTimerFill() {
   if (voiceTimer) {
     clearInterval(voiceTimer)
     voiceTimer = null
   }
+}
+
+function clearVoiceFallbackFill() {
+  if (voiceStopFallbackFill) {
+    clearTimeout(voiceStopFallbackFill)
+    voiceStopFallbackFill = null
+  }
+}
+
+/** stop() 后 3 秒仍未收到 onStop/onError（如录音未真正启动）的兜底，防止卡死 */
+function armVoiceStopFallbackFill() {
+  clearVoiceFallbackFill()
+  voiceStopFallbackFill = setTimeout(() => {
+    voiceStopFallbackFill = null
+    if (!voiceAwaitingStop) return
+    voiceAwaitingStop = false
+    clearVoiceTimerFill()
+    if (voiceStopRequested) {
+      voiceRecording = false
+      voiceActive.value = false
+      checkVoiceFinishFill()
+    }
+    else {
+      startNextSegmentFill()
+    }
+  }, 3000)
+}
+
+function updateVoiceCharsFill() {
+  voiceChars.value = voiceSegments.filter(Boolean).join('').length
 }
 
 function startVoiceRecognition() {
@@ -716,66 +769,142 @@ function ensureVoiceRecorderFill() {
   const rm: any = uni.getRecorderManager()
   if (!rm) return null
   rm.onStop((res: any) => {
-    if (voiceStopFallbackFill) { clearTimeout(voiceStopFallbackFill); voiceStopFallbackFill = null }
-    voiceRecording = false
-    voiceActive.value = false
+    // 只处理本端主动发起的 stop()，拦截重复回调，避免段号乱跳
+    if (!voiceAwaitingStop) return
+    voiceAwaitingStop = false
+    clearVoiceFallbackFill()
     clearVoiceTimerFill()
-    uni.hideLoading()
+    const segIdx = voiceSegIndex
+    const segNo = segIdx + 1
     const fs = uni.getFileSystemManager()
     fs.readFile({
       filePath: res.tempFilePath,
       encoding: 'base64',
-      success: async (r: any) => {
-        uni.showLoading({ title: '语音转写中...' })
-        try {
-          const data = await DoctorAPI.asr({ audio_base64: r.data as string, format: 'mp3' })
-          uni.hideLoading()
-          const text = (data.text || '').trim()
-          if (!text) {
-            uni.showToast({ title: '未识别到内容，请重试', icon: 'none' })
-            return
-          }
-          // 转写文本可编辑确认 → AI 解析回填
-          uni.showModal({
-            title: '识别内容确认',
-            editable: true,
-            content: text,
-            success: async (m) => {
-              if (!m.confirm || !m.content) return
-              uni.showLoading({ title: 'AI 解析中...' })
-              try {
-                const result = await http.Post('/cpx/doctor/ai/recognize', { text: m.content }) as Record<string, string>
-                uni.hideLoading()
-                fillFormData(result)
-              }
-              catch {
-                uni.hideLoading()
-                uni.showToast({ title: 'AI 解析失败', icon: 'none' })
-              }
-            },
-          })
-        }
-        catch (e: any) {
-          uni.hideLoading()
-          uni.showToast({ title: e?.msg || '语音转写失败，请重试', icon: 'none' })
-        }
+      success: (r: any) => {
+        if (voiceDisposed) return
+        // 先把下一段录起来，再后台上传本段 —— 段间停顿最短
+        if (!voiceStopRequested) startNextSegmentFill()
+        voicePending += 1
+        uploadVoiceSegmentFill(segIdx, segNo, r.data as string)
       },
       fail: () => {
-        uni.hideLoading()
-        uni.showToast({ title: '读取录音失败', icon: 'none' })
+        if (voiceDisposed) return
+        if (!voiceStopRequested) {
+          startNextSegmentFill()
+        }
+        else {
+          voiceSegFailed.push(segNo)
+          uni.showToast({ title: `第 ${segNo} 段读取失败，已跳过`, icon: 'none' })
+        }
+        checkVoiceFinishFill()
       },
     })
   })
   rm.onError(() => {
-    if (voiceStopFallbackFill) { clearTimeout(voiceStopFallbackFill); voiceStopFallbackFill = null }
-    voiceRecording = false
-    voiceActive.value = false
+    voiceAwaitingStop = false
+    clearVoiceFallbackFill()
     clearVoiceTimerFill()
     uni.hideLoading()
-    uni.showToast({ title: '录音失败，请重试', icon: 'none' })
+    voiceRecording = false
+    voiceActive.value = false
+    if (!voiceStopRequested) {
+      voiceStopRequested = true
+      uni.showToast({ title: '录音中断，已结束', icon: 'none' })
+    }
+    checkVoiceFinishFill()
   })
   voiceRecorder = rm
   return rm
+}
+
+/** 开始录当前段：录满 28 秒自动切段（智谱单次音频上限 30 秒，留 2 秒余量） */
+function beginVoiceSegmentFill() {
+  voiceSeconds.value = 0
+  clearVoiceTimerFill()
+  voiceTimer = setInterval(() => {
+    voiceSeconds.value += 1
+    if (voiceSeconds.value >= 28) {
+      clearVoiceTimerFill()
+      voiceAwaitingStop = true
+      if (voiceRecorder) voiceRecorder.stop()
+      armVoiceStopFallbackFill()
+    }
+  }, 1000)
+  if (voiceRecorder) voiceRecorder.start({ format: 'mp3', sampleRate: 16000 })
+}
+
+/** 续录下一段（段号 +1） */
+function startNextSegmentFill() {
+  if (voiceDisposed || voiceStopRequested) return
+  voiceSegIndex += 1
+  voiceSegNo.value = voiceSegIndex + 1
+  beginVoiceSegmentFill()
+}
+
+/** 后台上传单段音频做 ASR，结果按段号入缓存（不覆盖其他段） */
+async function uploadVoiceSegmentFill(segIdx: number, segNo: number, base64: string) {
+  try {
+    const data = await DoctorAPI.asr({ audio_base64: base64, format: 'mp3' })
+    const t = (data.text || '').trim()
+    if (t) voiceSegments[segIdx] = t
+    else voiceSegFailed.push(segNo)
+  }
+  catch {
+    voiceSegFailed.push(segNo)
+  }
+  finally {
+    voicePending -= 1
+    updateVoiceCharsFill()
+    checkVoiceFinishFill()
+  }
+}
+
+/** 用户已结束且所有段都返回 → 结算 */
+function checkVoiceFinishFill() {
+  if (voiceDisposed || voiceFinished) return
+  if (!voiceStopRequested || voicePending > 0) return
+  voiceFinished = true
+  clearVoiceTimerFill()
+  clearVoiceFallbackFill()
+  voiceRecording = false
+  voiceActive.value = false
+  uni.hideLoading()
+  finishVoiceRecordFill()
+}
+
+/** 结算：按段号顺序拼接全部文本 → 人工确认 → AI 解析回填 */
+function finishVoiceRecordFill() {
+  const joined = voiceSegments.filter(Boolean).join('').trim()
+  if (!joined) {
+    uni.showToast({
+      title: voiceSegFailed.length ? '语音识别失败，请重试' : '未识别到内容，请重试',
+      icon: 'none',
+    })
+    return
+  }
+  if (voiceSegFailed.length) {
+    uni.showToast({ title: `第 ${voiceSegFailed.join('、')} 段识别失败，其余已合并`, icon: 'none', duration: 2500 })
+  }
+  const okSegs = voiceSegments.filter(Boolean).length
+  // 转写文本可编辑确认 → AI 解析回填
+  uni.showModal({
+    title: `识别内容确认（共 ${okSegs} 段）`,
+    editable: true,
+    content: joined,
+    success: async (m) => {
+      if (!m.confirm || !m.content) return
+      uni.showLoading({ title: 'AI 解析中...' })
+      try {
+        const result = await http.Post('/cpx/doctor/ai/recognize', { text: m.content }) as Record<string, string>
+        uni.hideLoading()
+        fillFormData(result)
+      }
+      catch {
+        uni.hideLoading()
+        uni.showToast({ title: 'AI 解析失败', icon: 'none' })
+      }
+    },
+  })
 }
 
 function startVoiceRecordFill() {
@@ -784,37 +913,54 @@ function startVoiceRecordFill() {
     uni.showToast({ title: '当前环境不支持录音', icon: 'none' })
     return
   }
+  voiceSegments = []
+  voiceSegFailed = []
+  voiceSegIndex = 0
+  voiceSegNo.value = 1
+  voicePending = 0
+  voiceChars.value = 0
+  voiceStopRequested = false
+  voiceFinished = false
+  voiceAwaitingStop = false
+  voiceDisposed = false
   voiceRecording = true
   voiceActive.value = true
-  voiceSeconds.value = 0
-  clearVoiceTimerFill()
-  voiceTimer = setInterval(() => {
-    voiceSeconds.value += 1
-    // 28 秒上限自动结束（智谱 ASR 单次音频硬限制 30 秒，留 2 秒余量）
-    if (voiceSeconds.value >= 28) {
-      uni.showToast({ title: '已达 28 秒上限，自动结束', icon: 'none' })
-      stopVoiceRecordFill()
-    }
-  }, 1000)
-  rm.start({ format: 'mp3', sampleRate: 16000 })
-  uni.showToast({ title: '开始录音，点击屏幕下方录音条结束', icon: 'none', duration: 2000 })
+  beginVoiceSegmentFill()
+  uni.showToast({ title: '开始录音，说完点击屏幕下方录音条结束', icon: 'none', duration: 2500 })
 }
 
+/** 点击悬浮条：结束整轮录音（当前段转写完再按序拼接） */
 function stopVoiceRecordFill() {
+  if (!voiceRecording && !voiceActive.value) return
+  voiceStopRequested = true
   clearVoiceTimerFill()
-  if (voiceStopFallbackFill) { clearTimeout(voiceStopFallbackFill); voiceStopFallbackFill = null }
+  voiceRecording = false
+  voiceActive.value = false
+  uni.showLoading({ title: '整理识别结果...' })
+  // 若正处于自动切段（stop 已在途），等这次 onStop 回来即可，不重复调用 stop()
+  if (voiceAwaitingStop) return
+  voiceAwaitingStop = true
   if (voiceRecorder) voiceRecorder.stop()
-  // 兜底：若 2 秒内未收到 onStop/onError（如录音未真正开始），强制复位，防止录音条卡死无法退出
-  voiceStopFallbackFill = setTimeout(() => {
-    voiceStopFallbackFill = null
-    if (voiceActive.value || voiceRecording) {
-      voiceRecording = false
-      voiceActive.value = false
-      uni.hideLoading()
-      uni.showToast({ title: '录音已结束', icon: 'none' })
-    }
-  }, 2000)
+  armVoiceStopFallbackFill()
 }
+
+/** 离开页面：停循环、清计时器、丢弃未完成回调 */
+function disposeVoiceFill() {
+  voiceDisposed = true
+  voiceStopRequested = true
+  voiceFinished = true
+  voiceAwaitingStop = false
+  clearVoiceTimerFill()
+  clearVoiceFallbackFill()
+  voiceRecording = false
+  voiceActive.value = false
+  if (voiceRecorder) {
+    try { voiceRecorder.stop() }
+    catch { /* 忽略：可能未在录音 */ }
+  }
+}
+
+onUnload(() => { disposeVoiceFill() })
 
 /** 手动输入文字 → 调用后端 AI 解析（降级方案） */
 function voiceInputManual() {
@@ -1087,7 +1233,7 @@ function fillFormData(info: Record<string, string>) {
     <!-- #ifndef H5 -->
     <view v-if="voiceActive" class="voice-bar" @click="stopVoiceRecordFill">
       <view class="voice-dot" />
-      <text class="voice-text">正在录音 {{ voiceSeconds }}s，点击结束</text>
+      <text class="voice-text">正在录音 · 第 {{ voiceSegNo }} 段 {{ voiceSeconds }}s · 已转写 {{ voiceChars }} 字，点击结束</text>
     </view>
     <!-- #endif -->
   </view>

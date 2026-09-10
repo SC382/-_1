@@ -70,14 +70,36 @@ onLoad(async () => {
   catch { /* toast */ }
 })
 
-onUnload(() => {
-  clearRecordTimer()
-  if (recording.value && recorderManager) recorderManager.stop()
-})
+onUnload(() => { disposeVoice() })
 
 // 原生录音 → base64 → 后端 ASR 转写（仅 app-plus 支持原生录音，H5 降级提示）
+// 智谱 ASR 单次音频硬限制 30 秒（错误码 1214），故每段录满 28 秒自动切段续录：
+// 用户一直说到说完，各段文字按段号顺序拼接后落入输入框，再由用户点击「AI 解析录入」。
 let recorderManager: any = null
 let recordTimer: any = null
+let stopFallback: any = null
+/** 当前段号（从 1 起，仅用于展示） */
+const segNo = ref(1)
+/** 已转写累计字数（仅用于展示） */
+const chars = ref(0)
+/** 各段转写文本，下标 = 段下标（0 起），保证按口述顺序拼接 */
+let segments: string[] = []
+/** 识别失败的段号（从 1 起），用于最终提示 */
+let segFailed: number[] = []
+/** 当前段下标（0 起） */
+let segIndex = 0
+/** 在途转写请求数 */
+let pending = 0
+/** 用户已点击结束，不再续录 */
+let stopRequested = false
+/** 本轮是否已结算，防止重复写入输入框 */
+let finished = false
+/** 已调用 stop()、等待 onStop 回调（同时用于拦截重复回调） */
+let awaitingStop = false
+/** 页面已卸载，丢弃后续回调 */
+let disposed = false
+/** 录音开始前输入框已有内容，结算时保留在拼接结果之前 */
+let textBefore = ''
 
 function clearRecordTimer() {
   if (recordTimer) {
@@ -86,43 +108,155 @@ function clearRecordTimer() {
   }
 }
 
+function clearStopFallback() {
+  if (stopFallback) {
+    clearTimeout(stopFallback)
+    stopFallback = null
+  }
+}
+
+/** stop() 后 3 秒仍未收到 onStop/onError（如录音未真正启动）的兜底，防止卡死 */
+function armStopFallback() {
+  clearStopFallback()
+  stopFallback = setTimeout(() => {
+    stopFallback = null
+    if (!awaitingStop) return
+    awaitingStop = false
+    clearRecordTimer()
+    if (stopRequested) {
+      recording.value = false
+      checkFinish()
+    }
+    else {
+      startNextSegment()
+    }
+  }, 3000)
+}
+
+function updateChars() {
+  chars.value = segments.filter(Boolean).join('').length
+}
+
 function ensureRecorder() {
   if (recorderManager) return recorderManager
   const rm: any = uni.getRecorderManager()
   if (!rm) return null
   rm.onStop((res: any) => {
+    // 只处理本端主动发起的 stop()，拦截重复回调，避免段号乱跳
+    if (!awaitingStop) return
+    awaitingStop = false
+    clearStopFallback()
     clearRecordTimer()
-    recording.value = false
+    const segIdx = segIndex
+    const segNoCur = segIdx + 1
     const fs = uni.getFileSystemManager()
     fs.readFile({
       filePath: res.tempFilePath,
       encoding: 'base64',
-      success: async (r: any) => {
-        transcribing.value = true
-        try {
-          const data = await DoctorAPI.asr({ audio_base64: r.data as string, format: 'mp3' })
-          text.value = data.text || ''
-          uni.showToast({ title: '转写完成', icon: 'success' })
-        }
-        catch (e: any) {
-          uni.showToast({ title: e?.msg || '语音识别失败', icon: 'none' })
-        }
-        finally {
-          transcribing.value = false
-        }
+      success: (r: any) => {
+        if (disposed) return
+        // 先把下一段录起来，再后台上传本段 —— 段间停顿最短
+        if (!stopRequested) startNextSegment()
+        pending += 1
+        uploadSegment(segIdx, segNoCur, r.data as string)
       },
       fail: () => {
-        uni.showToast({ title: '读取录音失败', icon: 'none' })
+        if (disposed) return
+        if (!stopRequested) {
+          startNextSegment()
+        }
+        else {
+          segFailed.push(segNoCur)
+          uni.showToast({ title: `第 ${segNoCur} 段读取失败，已跳过`, icon: 'none' })
+        }
+        checkFinish()
       },
     })
   })
   rm.onError(() => {
+    awaitingStop = false
+    clearStopFallback()
     clearRecordTimer()
     recording.value = false
-    uni.showToast({ title: '录音失败', icon: 'none' })
+    if (!stopRequested) {
+      stopRequested = true
+      uni.showToast({ title: '录音中断，已结束', icon: 'none' })
+    }
+    checkFinish()
   })
   recorderManager = rm
   return rm
+}
+
+/** 开始录当前段：录满 28 秒自动切段（智谱单次音频上限 30 秒，留 2 秒余量） */
+function beginSegment() {
+  if (!recorderManager) return
+  clearRecordTimer()
+  let sec = 0
+  recordTimer = setInterval(() => {
+    sec += 1
+    if (sec >= 28) {
+      clearRecordTimer()
+      awaitingStop = true
+      recorderManager.stop()
+      armStopFallback()
+    }
+  }, 1000)
+  recorderManager.start({ format: 'mp3', sampleRate: 16000 })
+}
+
+/** 续录下一段（段号 +1） */
+function startNextSegment() {
+  if (disposed || stopRequested) return
+  segIndex += 1
+  segNo.value = segIndex + 1
+  beginSegment()
+}
+
+/** 后台上传单段音频做 ASR，结果按段号入缓存（不覆盖其他段） */
+async function uploadSegment(segIdx: number, segNoCur: number, base64: string) {
+  try {
+    const data = await DoctorAPI.asr({ audio_base64: base64, format: 'mp3' })
+    const t = (data.text || '').trim()
+    if (t) segments[segIdx] = t
+    else segFailed.push(segNoCur)
+  }
+  catch {
+    segFailed.push(segNoCur)
+  }
+  finally {
+    pending -= 1
+    updateChars()
+    checkFinish()
+  }
+}
+
+/** 用户已结束且所有段都返回 → 结算 */
+function checkFinish() {
+  if (disposed || finished) return
+  if (!stopRequested || pending > 0) return
+  finished = true
+  clearRecordTimer()
+  clearStopFallback()
+  recording.value = false
+  transcribing.value = false
+  const joined = segments.filter(Boolean).join('').trim()
+  if (!joined) {
+    uni.showToast({
+      title: segFailed.length ? '语音识别失败，请重试' : '未识别到内容，请重试',
+      icon: 'none',
+    })
+    return
+  }
+  const okSegs = segments.filter(Boolean).length
+  // 保留录音前已输入的内容，避免被冲掉
+  text.value = (textBefore ? `${textBefore}\n` : '') + joined
+  if (segFailed.length) {
+    uni.showToast({ title: `第 ${segFailed.join('、')} 段识别失败，其余已合并`, icon: 'none', duration: 2500 })
+  }
+  else {
+    uni.showToast({ title: `转写完成，共 ${okSegs} 段 ${joined.length} 字`, icon: 'success' })
+  }
 }
 
 function toggleRecord() {
@@ -137,23 +271,52 @@ function toggleRecord() {
     return
   }
   if (recording.value) {
-    clearRecordTimer()
-    rm.stop()
+    stopLoop()
+    return
   }
-  else {
-    recording.value = true
-    clearRecordTimer()
-    // 28 秒上限自动结束（智谱 ASR 单次音频硬限制 30 秒，留 2 秒余量）
-    let sec = 0
-    recordTimer = setInterval(() => {
-      sec += 1
-      if (sec >= 28) {
-        clearRecordTimer()
-        uni.showToast({ title: '已达 28 秒上限，自动结束', icon: 'none' })
-        rm.stop()
-      }
-    }, 1000)
-    rm.start({ format: 'mp3', sampleRate: 16000 })
+  // 开始新一轮分段录音
+  segments = []
+  segFailed = []
+  segIndex = 0
+  segNo.value = 1
+  pending = 0
+  chars.value = 0
+  stopRequested = false
+  finished = false
+  awaitingStop = false
+  disposed = false
+  textBefore = text.value.trim()
+  recording.value = true
+  beginSegment()
+  uni.showToast({ title: '开始录音，说完再点一次结束', icon: 'none', duration: 2500 })
+}
+
+/** 结束整轮录音（当前段转写完再按序拼接） */
+function stopLoop() {
+  if (!recording.value) return
+  stopRequested = true
+  clearRecordTimer()
+  recording.value = false
+  transcribing.value = true
+  // 若正处于自动切段（stop 已在途），等这次 onStop 回来即可，不重复调用 stop()
+  if (awaitingStop) return
+  awaitingStop = true
+  if (recorderManager) recorderManager.stop()
+  armStopFallback()
+}
+
+/** 离开页面：停循环、清计时器、丢弃未完成回调 */
+function disposeVoice() {
+  disposed = true
+  stopRequested = true
+  finished = true
+  awaitingStop = false
+  clearRecordTimer()
+  clearStopFallback()
+  recording.value = false
+  if (recorderManager) {
+    try { recorderManager.stop() }
+    catch { /* 忽略：可能未在录音 */ }
   }
 }
 
@@ -276,8 +439,9 @@ async function handleFill() {
     <view class="card">
       <text class="label">语音转写</text>
       <button class="mic-btn" :class="{ recording }" :disabled="transcribing" @click="toggleRecord">
-        {{ recording ? '⏹ 停止录音' : (transcribing ? '转写中...' : '🎙️ 点击开始录音') }}
+        {{ recording ? ('⏹ 结束录音（第 ' + segNo + ' 段 · 已转写 ' + chars + ' 字）') : (transcribing ? '整理识别结果...' : '🎙️ 点击开始录音') }}
       </button>
+      <text v-if="recording" class="rec-tip">可连续口述，每 28 秒自动续录一段，说完再点上方按钮结束</text>
       <textarea v-model="text" class="voice-input" :disabled="recording" placeholder="录音自动转写为文字，也可手动输入：如 患者胸痛2小时，8点发病，已给予阿司匹林，分诊为高危" placeholder-class="ph" />
       <button class="parse-btn" :disabled="parsing || !text.trim()" @click="parseText">
         {{ parsing ? '解析中...' : 'AI 解析录入' }}
@@ -325,11 +489,19 @@ async function handleFill() {
 .mic-btn::after { border: none; }
 .mic-btn.recording {
   background: linear-gradient(135deg, #ef4444, #f97316);
+  font-size: 26rpx;
   animation: pulse 1s infinite;
 }
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
+}
+.rec-tip {
+  display: block;
+  margin-top: 16rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: #6b7280;
 }
 
 .voice-input {
