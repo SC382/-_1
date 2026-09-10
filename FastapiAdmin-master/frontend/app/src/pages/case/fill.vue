@@ -734,21 +734,52 @@ function startVoiceRecognition() {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     const recognition = new SpeechRecognition()
     recognition.lang = 'zh-CN'
+    // 连续聆听：长句/多句不中断（否则默认只识别第一句就自动停止，内容不完整）
+    recognition.continuous = true
     recognition.interimResults = false
     recognition.maxAlternatives = 1
-    uni.showLoading({ title: '正在聆听...' })
-    recognition.onresult = async (event: any) => {
+    let allText = ''
+    let submitted = false
+    /** 会话结束后统一提交：可编辑确认 → AI 解析回填 */
+    const submitVoiceText = () => {
+      if (submitted) return
+      submitted = true
       uni.hideLoading()
-      const text = event.results[0][0].transcript
-      uni.showToast({ title: `识别到：${text.slice(0, 20)}...`, icon: 'none', duration: 2000 })
-      try {
-        const result = await http.Post('/cpx/doctor/ai/recognize', { text }) as Record<string, string>
-        fillFormData(result)
+      const text = allText.trim()
+      if (!text) {
+        uni.showToast({ title: '未识别到内容，请重试', icon: 'none' })
+        return
       }
-      catch {
-        uni.showToast({ title: 'AI 解析失败', icon: 'none' })
+      uni.showModal({
+        title: '识别内容确认',
+        editable: true,
+        content: text,
+        success: async (m) => {
+          if (!m.confirm || !m.content) return
+          uni.showLoading({ title: 'AI 解析中...' })
+          try {
+            const result = await http.Post('/cpx/doctor/ai/recognize', { text: m.content }) as Record<string, string>
+            uni.hideLoading()
+            fillFormData(result)
+          }
+          catch {
+            uni.hideLoading()
+            uni.showToast({ title: 'AI 解析失败', icon: 'none' })
+          }
+        },
+      })
+    }
+    uni.showLoading({ title: '正在聆听...' })
+    recognition.onresult = (event: any) => {
+      // 连续模式下会多次回调，按顺序累积成完整文本
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const t = event.results[i]?.[0]?.transcript || ''
+        if (t) allText += t
       }
     }
+    // 说话停顿即停止聆听，避免一直挂着
+    recognition.onspeechend = () => recognition.stop()
+    recognition.onend = () => submitVoiceText()
     recognition.onerror = () => { uni.hideLoading(); uni.showToast({ title: '语音识别失败，请重试', icon: 'none' }) }
     recognition.start()
     return
