@@ -682,6 +682,8 @@ const voicePanelText = ref('')
 const voiceNoResult = ref(false)
 let voiceTimer: any = null
 let voiceStopFallbackFill: any = null
+/** 结束阶段硬超时计时器（8 秒兜底，防止静音/回调丢失导致 loading 卡死） */
+let voiceHardTimerFill: any = null
 /** 各段转写文本，下标 = 段下标（0 起），保证按口述顺序拼接 */
 let voiceSegments: string[] = []
 /** 识别失败的段号（从 1 起），用于最终提示 */
@@ -795,6 +797,7 @@ function ensureVoiceRecorderFill() {
     voiceAwaitingStop = false
     clearVoiceFallbackFill()
     clearVoiceTimerFill()
+    clearHardFinishFill()
     const segIdx = voiceSegIndex
     const segNo = segIdx + 1
     const fs = uni.getFileSystemManager()
@@ -803,10 +806,19 @@ function ensureVoiceRecorderFill() {
       encoding: 'base64',
       success: (r: any) => {
         if (voiceDisposed) return
+        const b64 = (r.data as string) || ''
+        // 空音频前置判定：静音/未录到有效声音时文件极小（base64 长度 < 1400 ≈ 1KB），
+        // 直接判该段无内容，避免白等一次上传 + 转写
+        if (b64.length < 1400) {
+          voiceSegFailed.push(segNo)
+          if (!voiceStopRequested) startNextSegmentFill()
+          else checkVoiceFinishFill()
+          return
+        }
         // 先把下一段录起来，再后台上传本段 —— 段间停顿最短
         if (!voiceStopRequested) startNextSegmentFill()
         voicePending += 1
-        uploadVoiceSegmentFill(segIdx, segNo, r.data as string)
+        uploadVoiceSegmentFill(segIdx, segNo, b64)
       },
       fail: () => {
         if (voiceDisposed) return
@@ -825,6 +837,7 @@ function ensureVoiceRecorderFill() {
     voiceAwaitingStop = false
     clearVoiceFallbackFill()
     clearVoiceTimerFill()
+    clearHardFinishFill()
     uni.hideLoading()
     voiceRecording = false
     voiceActive.value = false
@@ -851,7 +864,8 @@ function beginVoiceSegmentFill() {
       armVoiceStopFallbackFill()
     }
   }, 1000)
-  if (voiceRecorder) voiceRecorder.start({ format: 'mp3', sampleRate: 16000 })
+  // 16kHz 单声道 + 16kbps 码率：语音识别足够，体积约为默认（96kbps）的 1/6，上传显著加快
+  if (voiceRecorder) voiceRecorder.start({ format: 'mp3', sampleRate: 16000, numberOfChannels: 1, encodeBitRate: 16000 })
 }
 
 /** 续录下一段（段号 +1） */
@@ -880,17 +894,45 @@ async function uploadVoiceSegmentFill(segIdx: number, segNo: number, base64: str
   }
 }
 
-/** 用户已结束且所有段都返回 → 结算 */
+/** 用户已结束且所有段都返回 → 结算（幂等；先关 loading，确保任何路径下都不会卡住） */
 function checkVoiceFinishFill() {
   if (voiceDisposed || voiceFinished) return
+  // 无论后续是否满足结算条件，先保证 loading 被关闭，避免模态遮挡导致页面卡死
+  uni.hideLoading()
   if (!voiceStopRequested || voicePending > 0) return
   voiceFinished = true
   clearVoiceTimerFill()
   clearVoiceFallbackFill()
+  clearHardFinishFill()
   voiceRecording = false
   voiceActive.value = false
-  uni.hideLoading()
   finishVoiceRecordFill()
+}
+
+/** 结束阶段硬超时兜底：8 秒内未完成结算则强制收尾（静音、上传挂起、回调丢失均覆盖） */
+function clearHardFinishFill() {
+  if (voiceHardTimerFill) {
+    clearTimeout(voiceHardTimerFill)
+    voiceHardTimerFill = null
+  }
+}
+
+function armHardFinishFill() {
+  clearHardFinishFill()
+  voiceHardTimerFill = setTimeout(() => {
+    voiceHardTimerFill = null
+    if (voiceDisposed || voiceFinished) return
+    // 强制结算：丢弃仍在途的段，用已有结果拼接
+    voiceFinished = true
+    voiceStopRequested = true
+    voiceAwaitingStop = false
+    clearVoiceTimerFill()
+    clearVoiceFallbackFill()
+    voiceRecording = false
+    voiceActive.value = false
+    uni.hideLoading()
+    finishVoiceRecordFill()
+  }, 8000)
 }
 
 /** 结算：按段号顺序拼接全部文本 → 落入底部面板文字框（用户可编辑后确认解析） */
@@ -972,6 +1014,8 @@ function stopVoiceRecordFill() {
   // 面板保持展开，等转写回来后原位变成文字框
   voicePanelRecording.value = false
   uni.showLoading({ title: '整理识别结果...' })
+  // 硬超时兜底：即使 onStop 不回调 / 上传挂起，8 秒内也必定收尾
+  armHardFinishFill()
   // 若正处于自动切段（stop 已在途），等这次 onStop 回来即可，不重复调用 stop()
   if (voiceAwaitingStop) return
   voiceAwaitingStop = true
@@ -987,6 +1031,7 @@ function disposeVoiceFill() {
   voiceAwaitingStop = false
   clearVoiceTimerFill()
   clearVoiceFallbackFill()
+  clearHardFinishFill()
   voiceRecording = false
   voiceActive.value = false
   voicePanel.value = false
