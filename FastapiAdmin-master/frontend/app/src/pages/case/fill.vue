@@ -1067,6 +1067,9 @@ function voiceInputManual() {
 
 /** 将 AI 识别结果回填到 form_data（按 field_code 匹配） */
 function fillFormData(info: Record<string, string>) {
+  // 识别成功也统一在此关闭 loading：调用方（图片识别）成功路径未自行关闭，
+  // 缺此调用会导致「AI 识别中...」遮罩永久停留
+  uni.hideLoading()
   // AI 返回字段（标准编码/中文名）→ 模板表单 field_code 动态映射
   const fieldAlias: Record<string, string> = {
     patient_name: 'patient_name', '姓名': 'patient_name', '患者姓名': 'patient_name',

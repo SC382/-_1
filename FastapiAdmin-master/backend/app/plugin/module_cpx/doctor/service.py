@@ -25,7 +25,9 @@ from app.plugin.module_cpx.fields import (
     FIELDS_BY_CODE,
     QUALITY_METRICS,
     TABS,
+    TIMELINE_CORE_CODES,
     TIMELINE_NODES,
+    timeline_label,
 )
 from app.plugin.module_cpx.models import (
     AuditRecordModel,
@@ -41,8 +43,8 @@ from app.plugin.module_cpx.models import (
     UserAccountModel,
 )
 
-# 救治时间线约定的字段编码（按救治流程顺序，缺失则跳过逻辑校验）
-TIMELINE_FIELDS = ["onset_time", "arrive_gate_time", "first_ecg_time", "balloon_time"]
+# 救治时间线约定的字段编码（单一权威源见 fields.TIMELINE_CORE_CODES，缺失则跳过逻辑校验）
+TIMELINE_FIELDS = TIMELINE_CORE_CODES
 
 EDITABLE_STATUS = ("draft", "rejected")  # 仅草稿/驳回状态允许修改与重提
 
@@ -223,13 +225,13 @@ class DoctorService:
             await self.db.execute(select(CaseDetailModel).where(CaseDetailModel.case_id == id))
         ).scalars().first()
         if not detail:
-            detail = CaseDetailModel(case_id=id, template_id=template_id, form_data={})
+            # 首次保存：必须落盘传入的 form_data，否则用户填的内容全丢
+            detail = CaseDetailModel(case_id=id, template_id=template_id, form_data=form_data or {})
             self.db.add(detail)
         else:
             detail.template_id = template_id
             detail.form_data = form_data
             detail.update_time = datetime.now()
-        self.db.add(detail)
         await self.db.flush()
         return {"id": case.id, "case_no": case.case_no, "status": case.status}
 
@@ -331,12 +333,8 @@ class DoctorService:
 
     @staticmethod
     def _label(code: str) -> str:
-        return {
-            "onset_time": "发病时间",
-            "arrive_gate_time": "到达大门时间",
-            "first_ecg_time": "首份心电图时间",
-            "balloon_time": "球囊开通时间",
-        }.get(code, code)
+        # 统一从 fields.TIMELINE_NODES 取名，避免各处硬编码中文
+        return timeline_label(code)
 
     @staticmethod
     def _parse_time(value) -> datetime | None:
@@ -1271,6 +1269,12 @@ class DoctorService:
                 else:
                     return None
                 fp = _Path(str(STATIC_DIR)) / path
+                # 安全：规范化后必须仍在 STATIC_DIR 内，防止 ../../ 路径穿越
+                try:
+                    if not fp.resolve().is_relative_to(_Path(str(STATIC_DIR)).resolve()):
+                        return None
+                except (OSError, ValueError):
+                    return None
                 if not fp.exists():
                     return None
                 mime = mimetypes.guess_type(str(fp))[0] or "image/jpeg"
@@ -1483,7 +1487,15 @@ class DoctorService:
         return {"items": items}
 
     async def ecg_list_by_case(self, *, case_id: int) -> dict:
-        """某病例的全部心电记录（供随访页「心电图」联动下拉）。"""
+        """某病例的全部心电记录（供随访页「心电图」联动下拉）。
+
+        安全：先校验病例存在且属于当前医生所在医院，避免遍历 case_id 跨院拉取心电数据。
+        """
+        case = await self.db.get(CaseRecordModel, case_id)
+        if not case:
+            raise CustomException(msg="病例不存在")
+        if case.hospital_id != self.auth.user.hospital_id:
+            raise CustomException(msg="无权查看该病例的心电记录", code=10403, status_code=403)
         rows = (
             await self.db.execute(
                 select(EcgConsultModel)

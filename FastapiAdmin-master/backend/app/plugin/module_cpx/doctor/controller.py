@@ -86,6 +86,12 @@ def _resolve_image_data_uri(image_url: str) -> str:
     else:
         return image_url
     f = STATIC_DIR / path
+    # 安全：规范化后必须仍在 STATIC_DIR 内，防止 ../../ 路径穿越读取任意文件
+    try:
+        if not f.resolve().is_relative_to(_Path(STATIC_DIR).resolve()):
+            return image_url
+    except (OSError, ValueError):
+        return image_url
     if f.exists() and f.is_file():
         mime = mimetypes.guess_type(str(f))[0] or "image/png"
         return f"data:{mime};base64,{_b64.b64encode(f.read_bytes()).decode()}"

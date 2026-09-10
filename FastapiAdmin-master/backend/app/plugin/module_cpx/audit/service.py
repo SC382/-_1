@@ -3,8 +3,8 @@
 
 校验规则：
 - 数据完整性：模板必填字段（required_flag=1）在 form_data 中必须非空。
-- 时间逻辑（按约定 field_code）：onset_time(发病) ≤ arrival_time(到院) ≤ ecg_time(首次心电图) ≤ pci_time(PCI)。
-  字段不存在时跳过对应比较；存在但空字符串时跳过。
+- 时间逻辑：按救治流程顺序比较 TIMELINE_CORE_CODES（发病 → 到达大门 → 首份心电图 → 球囊开通）。
+  字段不存在时跳过对应比较；存在但空字符串时跳过。**校验结果仅作提示，不阻断审核通过。**
 """
 
 from datetime import datetime, timedelta
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import CustomException
 
 from app.plugin.module_cpx.auth.dependencies import BizAuth
+from app.plugin.module_cpx.fields import TIMELINE_CORE_CODES, timeline_label
 from app.plugin.module_cpx.models import (
     AuditRecordModel,
     CaseDetailModel,
@@ -23,8 +24,8 @@ from app.plugin.module_cpx.models import (
     TemplateFieldModel,
 )
 
-# 救治时间线约定的字段编码（缺失则跳过逻辑校验）
-TIMELINE_FIELDS = ["onset_time", "arrival_time", "ecg_time", "pci_time"]
+# 救治时间线约定的字段编码（单一权威源见 fields.TIMELINE_CORE_CODES，缺失则跳过逻辑校验）
+TIMELINE_FIELDS = TIMELINE_CORE_CODES
 
 
 class AuditService:
@@ -235,12 +236,8 @@ class AuditService:
 
     @staticmethod
     def _label(code: str) -> str:
-        return {
-            "onset_time": "发病时间",
-            "arrival_time": "到院时间",
-            "ecg_time": "首次心电图时间",
-            "pci_time": "PCI时间",
-        }.get(code, code)
+        # 统一从 fields.TIMELINE_NODES 取名，避免各处硬编码中文导致提示与实际字段不符
+        return timeline_label(code)
 
     @staticmethod
     def _parse_time(value) -> datetime | None:

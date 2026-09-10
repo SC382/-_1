@@ -140,6 +140,20 @@ TIMELINE_NODES = [
     ("surgery_end_time", "手术结束"),
 ]
 
+# ── 审核/提交共用的核心时间节点（顺序即校验顺序）──────
+# 单一权威源：医生端提交校验与审核端复核校验都必须引用此常量，
+# 严禁各自硬编码字段名（历史上 audit 端硬编码了不存在的 arrival_time/ecg_time/pci_time，
+# 导致审核时间逻辑校验形同虚设）。
+TIMELINE_CORE_CODES = ["onset_time", "arrive_gate_time", "first_ecg_time", "balloon_time"]
+
+
+def timeline_label(code: str) -> str:
+    """时间节点 code → 中文名（供校验提示复用，避免各处硬编码中文）。"""
+    for c, name in TIMELINE_NODES:
+        if c == code:
+            return name
+    return code
+
 # ── 质控指标（单病例分析）────────────────────────────
 # 指标名 -> 起止时间节点 code + 达标阈值(分钟)
 QUALITY_METRICS = [

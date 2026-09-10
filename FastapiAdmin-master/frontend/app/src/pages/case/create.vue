@@ -144,6 +144,9 @@ function normalizeIdType(v: string): string {
 }
 
 function fillFromRecognized(data: Record<string, string>) {
+  // 识别成功也统一在此关闭 loading：调用方（图片/文字识别）成功路径无法自行关闭，
+  // 缺此调用会导致「AI 识别中...」遮罩永久停留
+  uni.hideLoading()
   let filled = 0
   for (const [k, v] of Object.entries(data)) {
     if (!v) continue
@@ -238,7 +241,7 @@ async function runOcrFromUrl(url: string, cardType: string) {
   try {
     uni.showLoading({ title: `${cardType}识别中...` })
     const result = await http.Post('/cpx/doctor/ai/ocr', { image_url: url, card_type: cardType }) as Record<string, string>
-    uni.hideLoading()
+    // loading 由 fillFromRecognized 统一关闭，避免重复调用
     fillFromRecognized(result)
     if (result.ocr_text) {
       uni.showModal({

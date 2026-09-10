@@ -46,8 +46,12 @@ onLoad((opt: any) => {
 
 // 每次页面显示都刷新列表（从其他页面返回时）
 onShow(() => {
-  // 如果不是首次加载（onLoad 已调用过），才刷新
-  if (list.value.length > 0 || total.value > 0) fetchData()
+  // 如果不是首次加载（onLoad 已调用过），才刷新；
+  // 必须重置回第 1 页，否则会在已翻页状态下覆盖数据
+  if (list.value.length > 0 || total.value > 0) {
+    query.page_no = 1
+    fetchData()
+  }
 })
 
 const statusTabs = [
@@ -84,7 +88,9 @@ async function fetchData() {
       start_time: query.start_time || undefined,
       end_time: query.end_time || undefined,
     })
-    list.value = res.items
+    // 首页整体替换，后续页追加（否则「加载更多」会覆盖已有数据）
+    if (query.page_no === 1) list.value = res.items
+    else list.value = [...list.value, ...res.items]
     total.value = res.total
   }
   finally {
