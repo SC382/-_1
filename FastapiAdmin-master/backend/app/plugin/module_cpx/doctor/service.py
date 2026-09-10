@@ -1350,20 +1350,27 @@ class DoctorService:
         )
         try:
             import httpx
+
+            _url = settings.DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
+            _headers = {
+                "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            # 关闭思考：推理模型（deepseek-v4-flash）的思考草稿会挤占 max_tokens，
+            # 一旦被截断 content 会为空并静默回退到兜底诊断，故统一关闭；
+            # 网关不认该参数（400）时去掉重试一次
+            _body = {
+                "model": settings.DEEPSEEK_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4000,
+                "temperature": 0.3,
+                "thinking": {"type": "disabled"},
+            }
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    settings.DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": settings.DEEPSEEK_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 4000,
-                        "temperature": 0.3,
-                    },
-                )
+                resp = await client.post(_url, headers=_headers, json=_body)
+                if resp.status_code == 400:
+                    _body.pop("thinking", None)
+                    resp = await client.post(_url, headers=_headers, json=_body)
                 resp.raise_for_status()
                 data = resp.json()
             msg = ((data.get("choices") or [{}])[0].get("message") or {})

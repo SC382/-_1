@@ -94,21 +94,26 @@ class KbService:
             "3. 回答末尾单独一行标注依据来源，格式：【依据：《文件名》（第X页）】，引用多个文件用顿号分隔。"
         )
         try:
+            _url = base_url.rstrip("/") + "/chat/completions"
+            _headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            # 关闭思考：DEEPSEEK_MODEL（deepseek-v4-flash）是推理模型，思考草稿会挤占 max_tokens
+            # （实测同一问题思考占约 1000 tokens），截断后回答缺尾且无任何报错；
+            # 关闭后约 1s 返回完整回答，网关不认该参数（400）时去掉重试一次
+            _body = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4000,
+                "temperature": 0.2,
+                "thinking": {"type": "disabled"},
+            }
             async with httpx.AsyncClient(timeout=90) as client:
-                resp = await client.post(
-                    base_url.rstrip("/") + "/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        # 知识库问答用专用快模型（deepseek-chat，非推理，2-10s 响应）
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 4000,
-                        "temperature": 0.2,
-                    },
-                )
+                resp = await client.post(_url, headers=_headers, json=_body)
+                if resp.status_code == 400:
+                    _body.pop("thinking", None)
+                    resp = await client.post(_url, headers=_headers, json=_body)
                 resp.raise_for_status()
                 data = resp.json()
             msg = ((data.get("choices") or [{}])[0].get("message") or {})

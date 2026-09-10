@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, File, Path, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-import httpx, json
+import base64, httpx, json
 
 from app.common.response import SuccessResponse
 from app.core.exceptions import CustomException
@@ -552,7 +552,9 @@ async def ai_recognize_controller(
             "**特别注意**：身份证卡面上的『公民身份号码』『证件号码』『号码』等字样是身份证号一栏的标题文字，不是证件类型，"
             "严禁把 card_type 识别成『公民身份号码』；只要卡片样式或标题表明是身份证，card_type 一律输出 身份证\n"
             "7. **日期格式必须统一**：日期型字段一律输出 YYYY-MM-DD（如 1968-03-12，不要写 1968年3月12日）；"
-            "日期时间型字段一律输出 YYYY-MM-DD HH:MM（如 2026-08-28 14:30）\n\n"
+            "日期时间型字段一律输出 YYYY-MM-DD HH:MM（如 2026-08-28 14:30）\n"
+            "8. **只输出字段值本身**，不要带字段名/标签/冒号前缀"
+            "（如 insurance_no 输出 YB20260828001，而不是「医保卡号：YB20260828001」）\n\n"
             "只返回纯JSON对象，不要任何解释或markdown格式。"
         )
         messages = [{"role": "user", "content": [
@@ -562,6 +564,8 @@ async def ai_recognize_controller(
         model = settings.ZHIPU_VISION_MODEL or "glm-4v-flash"
         base_url = settings.ZHIPU_BASE_URL
         api_key = settings.ZHIPU_API_KEY
+        # 智谱视觉模型 max_tokens 硬上限 1024（超出报 1210），不可上调
+        max_tokens = 1024
     else:
         # 文字解析：AI 自主判断文本中的字段并提取
         prompt = (
@@ -575,31 +579,61 @@ async def ai_recognize_controller(
             "4. 文字中出现但不在字典里的字段，也用语义化英文 key 输出，不要丢弃\n"
             "5. 若字段标注了【可选值】，请把识别/判断结果归一化到其中一个可选值（如 card_type→身份证/医保卡/其他）\n"
             "6. **日期格式必须统一**：日期型一律 YYYY-MM-DD（如 1968-03-12）；日期时间型一律 YYYY-MM-DD HH:MM\n"
-            "7. 只返回纯JSON，无解释无markdown\n\n"
+            "7. **只输出字段值本身**，不要带字段名/标签/冒号前缀"
+            "（如 insurance_no 输出 YB20260828001，而不是「医保卡号：YB20260828001」）\n"
+            "8. 只返回纯JSON，无解释无markdown\n\n"
             f"文字内容：{text}"
         )
         messages = [{"role": "user", "content": prompt}]
         model = settings.OPENAI_TEXT_MODEL or settings.DEEPSEEK_MODEL or "deepseek-chat"
         base_url = settings.DEEPSEEK_BASE_URL
         api_key = settings.DEEPSEEK_API_KEY
+        # 文字解析走 DeepSeek：下方请求体已关闭思考（thinking.disabled），输出预算基本全部
+        # 留给 JSON 正文，4096 足够；若网关不支持该参数，仍有 reasoning_content 兜底 + 截断检测，
+        # 不会静默返回半截数据
+        max_tokens = 4096
 
     if not api_key or api_key.startswith("sk-placeholder"):
         raise CustomException(msg="未配置 AI API Key：图片识别需 ZHIPU_API_KEY，文字解析需 DEEPSEEK_API_KEY")
+    req_body: dict = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.1}
+    if not image_url:
+        # 结构化抽取无需长链思考：deepseek-v4-flash 默认产出大量 reasoning，
+        # 实测同一段文字思考独占 4096~8000 tokens、耗时 18s，把输出预算挤满导致 JSON 正文被截断；
+        # 关闭思考后约 1.5s / 400 tokens 即返回完整 JSON，字段覆盖相当。
+        req_body["thinking"] = {"type": "disabled"}
+    # 兼容个别网关不认 thinking 参数：返回 400 时去掉该参数重试一次
+    payloads = (
+        [req_body, {k: v for k, v in req_body.items() if k != "thinking"}]
+        if "thinking" in req_body
+        else [req_body]
+    )
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.1},
-            )
-            resp.raise_for_status()
+            for idx, payload in enumerate(payloads):
+                resp = await client.post(
+                    base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                )
+                if resp.status_code == 400 and idx < len(payloads) - 1:
+                    continue
+                resp.raise_for_status()
+                break
             data = resp.json()
-        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "").strip()
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        content = (message.get("content") or "").strip()
+        if not content:
+            # 推理型模型（deepseek-v4-flash）思考草稿在 reasoning_content、正文在 content；
+            # content 被挤空时兜底取 reasoning_content，避免整次识别直接失败
+            content = (message.get("reasoning_content") or "").strip()
+        # finish_reason=length 表示输出被 max_tokens 截断，此时 JSON 必然不完整
+        truncated = choice.get("finish_reason") == "length"
     except Exception as e:
         raise CustomException(msg=f"AI 服务调用失败：{e}") from e
 
     if not content:
-        raise CustomException(msg="AI 未返回有效内容")
+        raise CustomException(msg="AI 未返回有效内容，请重试")
     # 提取 JSON（兼容 ```json 包裹）
     raw = content
     if "```" in content:
@@ -607,13 +641,21 @@ async def ai_recognize_controller(
         raw = parts[1].strip()
         if raw.startswith("json"):
             raw = raw[4:].strip()
-    try:
-        result = json.loads(raw)
-        if not isinstance(result, dict):
-            raise json.JSONDecodeError("not dict", raw, 0)
-        return SuccessResponse(data=result, msg="AI 识别成功")
-    except json.JSONDecodeError:
-        return SuccessResponse(data={"raw_text": content}, msg="AI 返回文本（请核对）")
+    # 依次尝试：整段解析 → 截取首个 { 到末个 } 再解析（容忍前后夹带的说明性文字）
+    candidates = [raw]
+    _start, _end = raw.find("{"), raw.rfind("}")
+    if _start >= 0 and _end > _start:
+        candidates.append(raw[_start : _end + 1])
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return SuccessResponse(data=obj, msg="AI 识别成功")
+    if truncated:
+        raise CustomException(msg="AI 输出被截断（录入内容过长），请精简后重试或分次录入")
+    return SuccessResponse(data={"raw_text": content}, msg="AI 返回文本（请核对）")
 
 
 @DoctorRouter.post("/ai/ocr", summary="证件 OCR 识别（腾讯云：身份证 IDCardOCR / 医保卡通用印刷体）")
@@ -765,17 +807,29 @@ async def ai_asr_controller(
         raise CustomException(msg="请提供 audio_base64（音频 base64 编码）")
     if not settings.ZHIPU_API_KEY or settings.ZHIPU_API_KEY.startswith("sk-placeholder"):
         raise CustomException(msg="未配置智谱 API Key（请在 env/.env.dev 配置 ZHIPU_API_KEY）")
+    # 兼容 data URL 前缀（data:audio/mp3;base64,xxxx）
+    if audio.startswith("data:") and "," in audio:
+        audio = audio.split(",", 1)[1]
+    try:
+        audio_bytes = base64.b64decode(audio)
+    except Exception as e:
+        raise CustomException(msg="音频数据解码失败，请重新录音") from e
+    if not audio_bytes:
+        raise CustomException(msg="音频数据为空，请重新录音")
+    # 智谱 audio/transcriptions 仅接受真正的文件上传（file 字段）；
+    # 以普通表单字段传 base64 会被判为「file和audio参数不能同时为空」(code 1214)
+    fmt = (body.get("format") or "mp3").lower().lstrip(".")
+    if fmt not in ("mp3", "wav"):
+        fmt = "mp3"
+    mime = "audio/wav" if fmt == "wav" else "audio/mpeg"
     model = settings.ZHIPU_ASR_MODEL or "glm-asr-2512"
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 settings.ZHIPU_BASE_URL.rstrip("/") + "/audio/transcriptions",
                 headers={"Authorization": f"Bearer {settings.ZHIPU_API_KEY}"},
-                files={
-                    "model": (None, model),
-                    "stream": (None, "false"),
-                    "file_base64": (None, audio),
-                },
+                files={"file": (f"voice.{fmt}", audio_bytes, mime)},
+                data={"model": model},
             )
             resp.raise_for_status()
             data = resp.json()
