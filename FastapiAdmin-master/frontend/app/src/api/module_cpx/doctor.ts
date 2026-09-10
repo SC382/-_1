@@ -337,9 +337,9 @@ export const DoctorAPI = {
   kbAsk(question: string) {
     return http.Post<{ answer: string; sources: { source_file: string; page_no: number }[]; hit_count: number }>('/cpx/doctor/kb/ask', { question }, { timeout: 120000 })
   },
-  /** AI 语音识别（录音 base64 → 文字，智谱 GLM-ASR-2512；音频数 MB，超时放宽到 60s） */
+  /** AI 语音识别（录音 base64 → 文字，智谱 GLM-ASR-2512；单段音频 ≤28s，实测转写 <2s，超时 30s 足够且避免弱网下长时间挂起） */
   asr(body: { audio_base64: string; format?: string }) {
-    return http.Post<{ text: string }>('/cpx/doctor/ai/asr', body, { timeout: 600000 })
+    return http.Post<{ text: string }>('/cpx/doctor/ai/asr', body, { timeout: 30000 })
   },
   /** AI 图片/文字识别（图片→结构化字段，智谱 glm-4v-flash；max_tokens=1024，超时放宽到 60s） */
   recognize(body: { image_url?: string; text?: string }) {

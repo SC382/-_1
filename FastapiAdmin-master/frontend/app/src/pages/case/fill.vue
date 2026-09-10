@@ -797,7 +797,9 @@ function ensureVoiceRecorderFill() {
     voiceAwaitingStop = false
     clearVoiceFallbackFill()
     clearVoiceTimerFill()
-    clearHardFinishFill()
+    // ⚠️ 仅切段续录时可清硬超时；用户已点「结束」时必须保留 8 秒硬超时，
+    // 否则 onStop 正常返回后若 ASR 请求挂起，将无任何兜底 → loading 永久卡死
+    if (!voiceStopRequested) clearHardFinishFill()
     const segIdx = voiceSegIndex
     const segNo = segIdx + 1
     const fs = uni.getFileSystemManager()
