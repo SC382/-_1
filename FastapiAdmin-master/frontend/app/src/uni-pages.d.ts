@@ -8,8 +8,6 @@ type _LocationUrl =
   "/pages/academy/detail" |
   "/pages/academy/index" |
   "/pages/ai/index" |
-  "/pages/ai/ocr" |
-  "/pages/ai/voice" |
   "/pages/analysis/index" |
   "/pages/case/analysis" |
   "/pages/case/create" |
